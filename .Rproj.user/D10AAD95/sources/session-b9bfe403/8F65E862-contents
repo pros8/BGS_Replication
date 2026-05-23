@@ -1,5 +1,6 @@
 ---
 title: "Отчет по репликации статьи The Behavioralist Goes to School"
+author: "Григорьев Матвей, Кравец Иван, Просин Олег"
 output: html_document
 ---
 
@@ -21,6 +22,92 @@ bgs_data <- read_dta("data/all_BGS_data.dta")
 # выводим размерность, чтобы убедиться, что всё загрузилось
 dim(bgs_data)
 ```
+
+## Репликация таблиц 3,4,5
+
+```{r}
+# Общая подготовка данных
+bgs_balance <- bgs_data %>%
+  mutate(
+    treat_group = case_when(
+      treatment %in% c("INC", "IDC", "NS") ~ "Control",
+      treatment == "INF" ~ "Financial low",
+      treatment == "INH" ~ "Financial high",
+      treatment == "INLH" ~ "Financial loss",
+      treatment == "INT" ~ "Nonfinancial",
+      treatment == "INLT" ~ "Nonfinancial loss",
+      treatment == "IDH" ~ "Delayed Fin high",
+      treatment == "IDT" ~ "Delayed Nonfin",
+      treatment == "IDLH" ~ "Delayed Fin loss",
+      treatment == "IDLT" ~ "Delayed Nonfin loss",
+      TRUE ~ NA_character_
+    ),
+    # имитируем очистку пропусков из Stata-кода авторов
+    female = if_else(gender_unknown == 1, NA_real_, female),
+    black = if_else(unknown_race == 1, NA_real_, black),
+    hispanic = if_else(unknown_race == 1, NA_real_, hispanic),
+    baseline = if_else(missing_baseline == 1, NA_real_, baseline),
+    iep_yes = if_else(iep_unknown == 1, NA_real_, iep_yes),
+    math = if_else(subject == "math", 1, 0)
+  ) %>%
+  # переименовываем переменные для вывода таблиц
+  rename(
+    `Baseline test score` = baseline,
+    `Grade` = grade,
+    `Female` = female,
+    `Black` = black,
+    `Hispanic` = hispanic,
+    `Free or reduced price lunch` = free_reduced,
+    `Individualized Education Plan (IEP)` = iep_yes,
+    `Subject - Math` = math
+  )
+
+# Bloom (таблица 3)
+bloom_bal_data <- bgs_balance %>%
+  filter(district == "Bloom", treat_group %in% c("Control", "Financial low", "Financial high", "Financial loss")) %>%
+  mutate(treat_group = factor(treat_group, levels = c("Control", "Financial low", "Financial high", "Financial loss")))
+
+datasummary(
+  `Baseline test score` + Female + Black + Hispanic + `Free or reduced price lunch` ~ treat_group * (Mean + SD),
+  data = bloom_bal_data,
+  title = "Table 3: Baseline Characteristics by Treatment Group: Bloom"
+)
+
+# Chicago Heights (таблица 4)
+ch_bal_data <- bgs_balance %>%
+  filter(district == "CH", treat_group %in% c("Control", "Financial low", "Financial high", "Nonfinancial")) %>%
+  mutate(treat_group = factor(treat_group, levels = c("Control", "Financial low", "Financial high", "Nonfinancial")))
+
+datasummary(
+  `Baseline test score` + Grade + Female + Black + Hispanic + `Free or reduced price lunch` + `Individualized Education Plan (IEP)` ~ treat_group * (Mean + SD),
+  data = ch_bal_data,
+  title = "Table 4: Baseline Characteristics by Treatment Group: Chicago Heights"
+)
+
+# CPS панель A (таблица 5)
+cps_imm_data <- bgs_balance %>%
+  filter(district == "CPS", treat_group %in% c("Control", "Financial low", "Financial high", "Nonfinancial", "Financial loss", "Nonfinancial loss")) %>%
+  mutate(treat_group = factor(treat_group, levels = c("Control", "Financial low", "Financial high", "Nonfinancial", "Financial loss", "Nonfinancial loss")))
+
+datasummary(
+  `Baseline test score` + Grade + `Subject - Math` + Female + Black + `Free or reduced price lunch` + `Individualized Education Plan (IEP)` ~ treat_group * (Mean + SD),
+  data = cps_imm_data,
+  title = "Table 5 (Panel A): Baseline Characteristics: CPS (Immediate)"
+)
+
+# CPS панель B (таблица 5)
+cps_del_data <- bgs_balance %>%
+  filter(district == "CPS", treat_group %in% c("Control", "Delayed Fin high", "Delayed Nonfin", "Delayed Fin loss", "Delayed Nonfin loss")) %>%
+  mutate(treat_group = factor(treat_group, levels = c("Control", "Delayed Fin high", "Delayed Nonfin", "Delayed Fin loss", "Delayed Nonfin loss")))
+
+datasummary(
+  `Baseline test score` + Grade + `Subject - Math` + Female + Black + `Free or reduced price lunch` + `Individualized Education Plan (IEP)` ~ treat_group * (Mean + SD),
+  data = cps_del_data,
+  title = "Table 5 (Panel B): Baseline Characteristics: CPS (Delayed)"
+)
+```
+
+
 
 ## Репликация таблицы 6 - Немедленные вознаграждения (pooled)
 

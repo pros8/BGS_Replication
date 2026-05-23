@@ -3,7 +3,7 @@
     "path": "C:/Users/opros/Desktop/HW econ/BGS_Replication/replication_report.Rmd",
     "project_path": "replication_report.Rmd",
     "type": "r_markdown",
-    "hash": "2431120388",
+    "hash": "0",
     "contents": "",
     "dirty": false,
     "created": 1779536947825.0,
@@ -13,16 +13,16 @@
         "tempName": "Untitled1",
         "source_window_id": "",
         "Source": "Source",
-        "cursorPosition": "386,15",
-        "scrollLine": "379",
-        "last_setup_crc32": "c0a7729fc7e2e05c"
+        "cursorPosition": "19,40",
+        "scrollLine": "0",
+        "last_setup_crc32": ""
     },
     "folds": "",
-    "lastKnownWriteTime": 1779558325,
+    "lastKnownWriteTime": 1779560688,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1779558325297,
+    "last_content_update": 1779560688485,
     "read_only": false,
     "read_only_alternatives": []
 }

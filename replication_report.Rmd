@@ -82,13 +82,13 @@ modelsummary(
 ```
 
 
-## Анализ полученных результатов
+### Анализ полученных результатов
 
 Репликация в R, использующая прямое взаимодействие ковариат с индикатором округа, позволила со 100% точностью воспроизвести оригинальные результаты статьи (вплоть до тысячных долей коэффициентов и количества наблюдений - 6843).
 
 Результаты показывают, что эффект вознаграждений зависит от их размера и формулировки (framing). Небольшие финансовые стимулы (financial low) не оказывают статистически значимого влияния на успеваемость (коэффициент 0,009). Однако повышение суммы до 20 долларов (financial high) приводит к значительному росту результатов. Наибольшую эффективность демонстрируют вознаграждения, сформулированные как потенциальная потеря (loss framing) - коэффициенты 0,153 для финансовых и 0,115 для нефинансовых стимулов.
 
-## Репликация таблицы 7 - влияние отложенны вознаграждений
+## Репликация таблицы 7 - влияние отложенных вознаграждений
 
 В этой части оценивается влияние отложенных вознаграждений (выданных с задержкой в один месяц). Согласно методологии авторов, для этого используется только осенняя сессия 2010 года в округе CPS, а группа тритмента "Financial Low" исключается из выборки.
 
@@ -132,6 +132,108 @@ modelsummary(
 )
 ```
 
-## Анализ результатов таблицы 7
+### Анализ результатов таблицы 7
 
 Результаты оценки отложенных вознаграждений в репликации полностью совпали с финальной опубликованной версией статьи. Размер выборки составил ровно 2052 наблюдения. Незначимость всех коэффициентов подтверждает гипотезу о наличии у школьников гиперболического дисконтирования. Ученики настолько сильно дисконтируют будущие выгоды, что задержка вознаграждения всего на один месяц полностью нивелирует его стимулирующий эффект. Усилия на тесте остаются на базовом контрольном уровне.
+
+## Репликация таблицы 8
+
+```{r table8_code}
+# создаем индикатор начальной школы
+bgs_age <- bgs_filtered %>%
+  mutate(elementary = if_else(as.numeric(as.character(grade)) < 6, 1, 0))
+
+# формула для Pooled (с взаимодействиями округов)
+fmla_pooled <- current_score_t ~ INF + INH + INT + INLH + INLT +
+  district:session + district:grade + district:school +
+  district:baseline + district:missing_baseline + 
+  district:baseline_sq + district:baseline_cub +
+  district:past_treatment + district:ar_treatment +
+  district:black + district:hispanic + district:unknown_race + 
+  district:iep_unknown + district:iep_yes + 
+  district:female + district:gender_unknown + district:free_reduced
+
+# формула для отдельных округов (без взаимодействий с округом)
+fmla_single <- current_score_t ~ INF + INH + INT + INLH + INLT +
+  session + grade + school +
+  baseline + missing_baseline + baseline_sq + baseline_cub +
+  past_treatment + ar_treatment +
+  black + hispanic + unknown_race + 
+  iep_unknown + iep_yes + 
+  female + gender_unknown + free_reduced
+
+# Модели panel A (pooled)
+mod_pool_elem <- feols(fmla_pooled, data = filter(bgs_age, elementary == 1), cluster = ~cluster_var)
+mod_pool_mid  <- feols(fmla_pooled, data = filter(bgs_age, elementary == 0), cluster = ~cluster_var)
+
+# Модели panel B (Округа)
+# bloom (все secondary, поэтому elementary == 0)
+mod_bloom <- feols(fmla_single, data = filter(bgs_age, district == "Bloom"), cluster = ~cluster_var)
+
+# Chicago Heights
+mod_ch_elem <- feols(fmla_single, data = filter(bgs_age, district == "CH" & elementary == 1), cluster = ~cluster_var)
+mod_ch_mid  <- feols(fmla_single, data = filter(bgs_age, district == "CH" & elementary == 0), cluster = ~cluster_var)
+
+# CPS
+mod_cps_elem <- feols(fmla_single, data = filter(bgs_age, district == "CPS" & elementary == 1), cluster = ~cluster_var)
+mod_cps_mid  <- feols(fmla_single, data = filter(bgs_age, district == "CPS" & elementary == 0), cluster = ~cluster_var)
+
+# Вывод объединенной таблицы
+modelsummary(
+  list("Pooled Elem" = mod_pool_elem, "Pooled Mid" = mod_pool_mid,
+       "Bloom Sec" = mod_bloom, 
+       "CH Elem" = mod_ch_elem, "CH Mid" = mod_ch_mid,
+       "CPS Elem" = mod_cps_elem, "CPS Mid" = mod_cps_mid),
+  coef_map = c("INF" = "Financial low", 
+               "INH" = "Financial high",
+               "INT" = "Nonfinancial",
+               "INLH" = "Financial loss",
+               "INLT" = "Nonfinancial loss"),
+  gof_map = c("nobs", "n.clusters"),
+  stars = TRUE
+)
+```
+### Анализ результатов по возрасту (таблица 8)
+
+Репликация демонстрирует ярко выраженную гетерогенность эффектов в зависимости от возраста учеников. В объединенных моделях результаты полностью совпадают с выводами статьи: нефинансовые стимулы в виде потерь (Nonfinancial loss, 0.215) обладают огромной эффективностью для учеников начальной школы, однако для старшеклассников их воздействие полностью исчезает. В то же время старшеклассники сильнее реагируют на крупные денежные стимулы (Financial loss = 0.159). Это подтверждает гипотезу о том, что субъективная ценность нефинансовых наград падает по мере взросления.
+
+При анализе подвыборок по округам наблюдаются расхождения точечных оценок с оригинальной статьей (например, 0.062 вместо 0.124 для начальной школы Chicago Heights). Анализ оригинального скрипта ( в т.ч. с использованием LLM-модели) `table8_treatment_by_age.do` показал, что для решения проблемы мультиколлинеарности в малых подвыборках авторы применяли ручную "подгонку" спецификаций; например, для Chicago Heights они вручную удаляли контроли на параллель (`grade`), школу (`school`) и предмет (`subject`), оставляя их для остальных округов.
+
+
+## Репликация таблицы 9
+```{r table9_code}
+# --- Модели Panel A (Pooled) ---
+mod_pool_read <- feols(fmla_pooled, data = filter(bgs_filtered, subject == "reading"), cluster = ~cluster_var)
+mod_pool_math <- feols(fmla_pooled, data = filter(bgs_filtered, subject == "math"), cluster = ~cluster_var)
+
+# --- Модели Panel B (Округа) ---
+# Bloom (только чтение)
+mod_bloom_read <- feols(fmla_single, data = filter(bgs_filtered, district == "Bloom"), cluster = ~cluster_var)
+
+# Chicago Heights (только математика)
+mod_ch_math <- feols(fmla_single, data = filter(bgs_filtered, district == "CH"), cluster = ~cluster_var)
+
+# CPS (оба предмета)
+mod_cps_read <- feols(fmla_single, data = filter(bgs_filtered, district == "CPS" & subject == "reading"), cluster = ~cluster_var)
+mod_cps_math <- feols(fmla_single, data = filter(bgs_filtered, district == "CPS" & subject == "math"), cluster = ~cluster_var)
+
+# Вывод таблицы (без звездочек значимости)
+modelsummary(
+  list("Pooled Read" = mod_pool_read, "Pooled Math" = mod_pool_math,
+       "Bloom Read" = mod_bloom_read, "CH Math" = mod_ch_math,
+       "CPS Read" = mod_cps_read, "CPS Math" = mod_cps_math),
+  coef_map = c("INF" = "Financial low", 
+               "INH" = "Financial high",
+               "INT" = "Nonfinancial",
+               "INLH" = "Financial loss",
+               "INLT" = "Nonfinancial loss"),
+  gof_map = c("nobs", "n.clusters"),
+  stars = TRUE
+)
+```
+
+### Анализ результатов по предмету (таблица 9)
+
+Сравнение оценок в Панели B успешно воспроизводит результаты авторов: стимулирующий эффект вознаграждений существенно зависит от сдаваемого предмета. 
+
+Тесты по математике демонстрируют колоссальную чувствительность к стимулам. Коэффициенты Financial high (0.246) и Financial loss (0.299) являются значимыми. В то же время влияние стимулов на тесты по чтению (reading) значительно слабее (0.052 и 0.102 соответственно). Математические навыки требуют концентрации и более чувствительны к краткосрочным всплескам усилий, тогда как результаты по чтению в большей степени зависят от накопленного долгосрочного знания и меньше поддаются моментальному воздействию.

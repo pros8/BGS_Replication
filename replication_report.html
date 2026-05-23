@@ -10,7 +10,6 @@
 
 
 
-<meta name="date" content="2026-05-15" />
 
 <title>Отчет по репликации статьи The Behavioralist Goes to School</title>
 
@@ -351,66 +350,78 @@ display: none;
 
 <h1 class="title toc-ignore">Отчет по репликации статьи The
 Behavioralist Goes to School</h1>
-<h4 class="date">2026-05-15</h4>
 
 </div>
 
 
-<pre class="r"><code>#install.packages(c(&quot;tidyverse&quot;, &quot;haven&quot;, &quot;fixest&quot;, &quot;modelsummary&quot;))
-library(tidyverse)    # Для манипуляций с данными
-library(haven)        # Для чтения .dta файлов
-library(fixest)       # Для быстрых регрессий и кластеризованных ошибок
-library(modelsummary) # Для создания красивых таблиц
+<div id="загрузка-библиотек-и-данных" class="section level2">
+<h2>Загрузка библиотек и данных</h2>
+<pre class="r"><code># install.packages(c(&quot;tidyverse&quot;, &quot;haven&quot;, &quot;fixest&quot;, &quot;modelsummary&quot;))
+library(tidyverse)    # для манипуляций с данными
+library(haven)        # для чтения .dta файлов
+library(fixest)       # для быстрых регрессий и кластеризованных ошибок
+library(modelsummary) # для создания таблиц
 
-# Читаем данные
+# читаем данные
 bgs_data &lt;- read_dta(&quot;data/all_BGS_data.dta&quot;)
 
-#Выводим размерность
+# выводим размерность, чтобы убедиться, что всё загрузилось
 dim(bgs_data)</code></pre>
 <pre><code>## [1] 7305   73</code></pre>
-<pre class="r"><code>#Оставляем только нужные тритменты
+</div>
+<div id="репликация-таблицы-6---немедленные-вознаграждения-pooled" class="section level2">
+<h2>Репликация таблицы 6 - Немедленные вознаграждения (pooled)</h2>
+<p>В данном разделе выполняется репликация объединенных моделей (колонки
+1 и 2 оригинальной таблицы) для оценки немедленных вознаграждений.</p>
+<pre class="r"><code># подготовка данных
+
+# оставляем только нужные тритменты
 treatments_to_keep &lt;- c(&quot;INC&quot;, &quot;IDC&quot;, &quot;NS&quot;, &quot;CSM&quot;, &quot;INF&quot;, &quot;INH&quot;, &quot;INT&quot;, &quot;INLH&quot;, &quot;INLT&quot;)
 
 bgs_filtered &lt;- bgs_data %&gt;%
   filter(treatment %in% treatments_to_keep) %&gt;%
-  # Создаем переменную для кластеризации: school_grade для CPS/CH, class для Bloom
   mutate(
-    cluster_var = if_else(district %in% c(&quot;CPS&quot;, &quot;CH&quot;), school_grade, class)
+    cluster_var = if_else(district %in% c(&quot;CPS&quot;, &quot;CH&quot;), school_grade, class),
+    # переводим категориальные переменные в факторы, 
+    # чтобы сымитировать префикс &quot;i.&quot; из Stata
+    grade = as.factor(grade),
+    school = as.factor(school),
+    session = as.factor(session),
+    past_treatment = as.factor(past_treatment),
+    ar_treatment = as.factor(ar_treatment),
+    district = as.factor(district)
   )
 
-# Проверяем, сколько наблюдений осталось
-nrow(bgs_filtered)</code></pre>
-<pre><code>## [1] 6843</code></pre>
-<pre class="r"><code># Определяем формулы, как в Stata. 
-# fixest сам создаст дамми для факторных переменных.
-
 # Модель 1 - без расширенной демографии
+# Оператор &quot;:&quot; создает эффекты переменных внутри каждого округа
 mod1 &lt;- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
-                i(district, session) + i(district, grade) + i(district, school) +
-                i(district, baseline) + i(district, baseline_sq) + i(district, baseline_cub) + i(district, missing_baseline),
+                district:session + district:grade + district:school +
+                district:baseline + district:missing_baseline + 
+                district:baseline_sq + district:baseline_cub,
               data = bgs_filtered, 
               cluster = ~cluster_var)
 
-# Модель 2 - с расширенной демографией и историей
+# Модель 2 - с демографией и историей участия
+# i.subject исключен, чтобы в точности повторить pooled-регрессию из Stata
 mod2 &lt;- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
-                i(district, session) + i(district, grade) + i(district, school) +
-                i(district, baseline) + i(district, baseline_sq) + i(district, baseline_cub) + i(district, missing_baseline) +
-                i(district, past_treatment) + i(district, ar_treatment) +
-                i(district, black) + i(district, hispanic) + i(district, unknown_race) + 
-                i(district, iep_unknown) + i(district, iep_yes) + 
-                i(district, female) + i(district, gender_unknown) + i(district, free_reduced) +
-                i(district, subject),
+                district:session + district:grade + district:school +
+                district:baseline + district:missing_baseline + 
+                district:baseline_sq + district:baseline_cub +
+                district:past_treatment + district:ar_treatment +
+                district:black + district:hispanic + district:unknown_race + 
+                district:iep_unknown + district:iep_yes + 
+                district:female + district:gender_unknown + district:free_reduced,
               data = bgs_filtered, 
               cluster = ~cluster_var)
 
-# Выводим таблицу для проверки
+# Выводим таблицу
 modelsummary(
   list(&quot;Model 1 (No Covariates)&quot; = mod1, &quot;Model 2 (With Covariates)&quot; = mod2),
-  coef_map = c(&quot;INF&quot; = &quot;Financial Low&quot;, 
-               &quot;INH&quot; = &quot;Financial High&quot;,
-               &quot;INT&quot; = &quot;Non-Financial&quot;,
-               &quot;INLH&quot; = &quot;Financial Loss&quot;,
-               &quot;INLT&quot; = &quot;Non-Financial Loss&quot;),
+  coef_map = c(&quot;INF&quot; = &quot;Financial low&quot;, 
+               &quot;INH&quot; = &quot;Financial high&quot;,
+               &quot;INT&quot; = &quot;Nonfinancial&quot;,
+               &quot;INLH&quot; = &quot;Financial loss&quot;,
+               &quot;INLT&quot; = &quot;Nonfinancial loss&quot;),
   gof_map = c(&quot;nobs&quot;, &quot;n.clusters&quot;),
   stars = TRUE
 )</code></pre>
@@ -654,25 +665,25 @@ function tinytable_rank_sorter(a, b, aRow, bRow, column, dir, sorterParams) {
 
     <script>
       // Create table-specific functions using external factory
-      const tableFns_o47o8secwk37psez9f21 = TinyTable.createTableFunctions("tinytable_o47o8secwk37psez9f21");
+      const tableFns_plnuh6018zt17wvdj5zv = TinyTable.createTableFunctions("tinytable_plnuh6018zt17wvdj5zv");
       // tinytable span after
       window.addEventListener('load', function () {
           var cellsToStyle = [
             // tinytable style arrays after
-          { positions: [ { i: '11', j: 2 }, { i: '11', j: 3 } ], css_id: 'tinytable_css_9ykqrc7zc4p5rqrr6c0t',}, 
-          { positions: [ { i: '10', j: 2 }, { i: '10', j: 3 } ], css_id: 'tinytable_css_2cazbnsojuz59jy9z8sh',}, 
-          { positions: [ { i: '1', j: 2 }, { i: '2', j: 2 }, { i: '3', j: 2 }, { i: '4', j: 2 }, { i: '5', j: 2 }, { i: '6', j: 2 }, { i: '7', j: 2 }, { i: '8', j: 2 }, { i: '9', j: 2 }, { i: '1', j: 3 }, { i: '2', j: 3 }, { i: '3', j: 3 }, { i: '4', j: 3 }, { i: '5', j: 3 }, { i: '6', j: 3 }, { i: '7', j: 3 }, { i: '8', j: 3 }, { i: '9', j: 3 } ], css_id: 'tinytable_css_dafc19hqb67019rtw0mc',}, 
-          { positions: [ { i: '0', j: 2 }, { i: '0', j: 3 } ], css_id: 'tinytable_css_glkt90cnemnfmu6g9pqm',}, 
-          { positions: [ { i: '11', j: 1 } ], css_id: 'tinytable_css_otqupcsn24i70p0dyi7y',}, 
-          { positions: [ { i: '10', j: 1 } ], css_id: 'tinytable_css_0zf4j6ci0a5021fqgekc',}, 
-          { positions: [ { i: '1', j: 1 }, { i: '2', j: 1 }, { i: '3', j: 1 }, { i: '4', j: 1 }, { i: '5', j: 1 }, { i: '6', j: 1 }, { i: '7', j: 1 }, { i: '8', j: 1 }, { i: '9', j: 1 } ], css_id: 'tinytable_css_v2u5xs0n4w2l3wb7cq3t',}, 
-          { positions: [ { i: '0', j: 1 } ], css_id: 'tinytable_css_6pw1snoywqcheuzgmwzx',}, 
+          { positions: [ { i: '11', j: 2 }, { i: '11', j: 3 } ], css_id: 'tinytable_css_4xg6a5ympgejg5sxjy3u',}, 
+          { positions: [ { i: '10', j: 2 }, { i: '10', j: 3 } ], css_id: 'tinytable_css_2zynd23b4gf05zcz4ik8',}, 
+          { positions: [ { i: '1', j: 2 }, { i: '2', j: 2 }, { i: '3', j: 2 }, { i: '4', j: 2 }, { i: '5', j: 2 }, { i: '6', j: 2 }, { i: '7', j: 2 }, { i: '8', j: 2 }, { i: '9', j: 2 }, { i: '1', j: 3 }, { i: '2', j: 3 }, { i: '3', j: 3 }, { i: '4', j: 3 }, { i: '5', j: 3 }, { i: '6', j: 3 }, { i: '7', j: 3 }, { i: '8', j: 3 }, { i: '9', j: 3 } ], css_id: 'tinytable_css_t9l663dbdz5f9n86js7p',}, 
+          { positions: [ { i: '0', j: 2 }, { i: '0', j: 3 } ], css_id: 'tinytable_css_wc3teplxagoyvf8gji7z',}, 
+          { positions: [ { i: '11', j: 1 } ], css_id: 'tinytable_css_43gzw9f39a0j2z95nzdq',}, 
+          { positions: [ { i: '10', j: 1 } ], css_id: 'tinytable_css_j0mq19f73do5u5u6wz1r',}, 
+          { positions: [ { i: '1', j: 1 }, { i: '2', j: 1 }, { i: '3', j: 1 }, { i: '4', j: 1 }, { i: '5', j: 1 }, { i: '6', j: 1 }, { i: '7', j: 1 }, { i: '8', j: 1 }, { i: '9', j: 1 } ], css_id: 'tinytable_css_3bicr3c698n4698qtm35',}, 
+          { positions: [ { i: '0', j: 1 } ], css_id: 'tinytable_css_nom2a81gbz6a69mij26p',}, 
           ];
 
           // Loop over the arrays to style the cells
           cellsToStyle.forEach(function (group) {
               group.positions.forEach(function (cell) {
-                  tableFns_o47o8secwk37psez9f21.styleCell(cell.i, cell.j, group.css_id);
+                  tableFns_plnuh6018zt17wvdj5zv.styleCell(cell.i, cell.j, group.css_id);
               });
           });
       });
@@ -875,17 +886,17 @@ line-height: var(--tt-line-height-footnote-tight);
 </style>
     <style>
 
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_9ykqrc7zc4p5rqrr6c0t, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_9ykqrc7zc4p5rqrr6c0t { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.08em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_2cazbnsojuz59jy9z8sh, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_2cazbnsojuz59jy9z8sh { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_dafc19hqb67019rtw0mc, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_dafc19hqb67019rtw0mc { text-align: center }
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_glkt90cnemnfmu6g9pqm, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_glkt90cnemnfmu6g9pqm { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 1; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.08em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_otqupcsn24i70p0dyi7y, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_otqupcsn24i70p0dyi7y { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.08em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_0zf4j6ci0a5021fqgekc, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_0zf4j6ci0a5021fqgekc { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_v2u5xs0n4w2l3wb7cq3t, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_v2u5xs0n4w2l3wb7cq3t { text-align: left }
-#tinytable_o47o8secwk37psez9f21 td.tinytable_css_6pw1snoywqcheuzgmwzx, #tinytable_o47o8secwk37psez9f21 th.tinytable_css_6pw1snoywqcheuzgmwzx { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 1; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.08em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_4xg6a5ympgejg5sxjy3u, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_4xg6a5ympgejg5sxjy3u { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.08em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_2zynd23b4gf05zcz4ik8, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_2zynd23b4gf05zcz4ik8 { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_t9l663dbdz5f9n86js7p, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_t9l663dbdz5f9n86js7p { text-align: center }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_wc3teplxagoyvf8gji7z, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_wc3teplxagoyvf8gji7z { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 1; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.08em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_43gzw9f39a0j2z95nzdq, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_43gzw9f39a0j2z95nzdq { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.08em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_j0mq19f73do5u5u6wz1r, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_j0mq19f73do5u5u6wz1r { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_3bicr3c698n4698qtm35, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_3bicr3c698n4698qtm35 { text-align: left }
+#tinytable_plnuh6018zt17wvdj5zv td.tinytable_css_nom2a81gbz6a69mij26p, #tinytable_plnuh6018zt17wvdj5zv th.tinytable_css_nom2a81gbz6a69mij26p { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 1; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.08em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
 </style>
     <div class="container">
-      <table class="tinytable" id="tinytable_o47o8secwk37psez9f21" style="width: auto; margin-left: auto; margin-right: auto;" data-quarto-disable-processing="true">
+      <table class="tinytable" id="tinytable_plnuh6018zt17wvdj5zv" style="width: auto; margin-left: auto; margin-right: auto;" data-quarto-disable-processing="true">
         
         <thead>
               <tr>
@@ -897,39 +908,39 @@ line-height: var(--tt-line-height-footnote-tight);
         <tfoot><tr><td colspan="3">+ p &lt; 0.1, * p &lt; 0.05, ** p &lt; 0.01, *** p &lt; 0.001</td></tr></tfoot>
         <tbody>
                 <tr>
-                  <td data-row="1" data-col="1">Financial Low</td>
-                  <td data-row="1" data-col="2">0.005</td>
-                  <td data-row="1" data-col="3">-0.017</td>
+                  <td data-row="1" data-col="1">Financial low</td>
+                  <td data-row="1" data-col="2">0.009</td>
+                  <td data-row="1" data-col="3">-0.008</td>
                 </tr>
                 <tr>
                   <td data-row="2" data-col="1"></td>
-                  <td data-row="2" data-col="2">(0.043)</td>
+                  <td data-row="2" data-col="2">(0.042)</td>
                   <td data-row="2" data-col="3">(0.041)</td>
                 </tr>
                 <tr>
-                  <td data-row="3" data-col="1">Financial High</td>
-                  <td data-row="3" data-col="2">0.098**</td>
-                  <td data-row="3" data-col="3">0.069*</td>
+                  <td data-row="3" data-col="1">Financial high</td>
+                  <td data-row="3" data-col="2">0.093**</td>
+                  <td data-row="3" data-col="3">0.068*</td>
                 </tr>
                 <tr>
                   <td data-row="4" data-col="1"></td>
                   <td data-row="4" data-col="2">(0.030)</td>
-                  <td data-row="4" data-col="3">(0.028)</td>
+                  <td data-row="4" data-col="3">(0.027)</td>
                 </tr>
                 <tr>
-                  <td data-row="5" data-col="1">Non-Financial</td>
-                  <td data-row="5" data-col="2">0.055+</td>
-                  <td data-row="5" data-col="3">0.047</td>
+                  <td data-row="5" data-col="1">Nonfinancial</td>
+                  <td data-row="5" data-col="2">0.044</td>
+                  <td data-row="5" data-col="3">0.040</td>
                 </tr>
                 <tr>
                   <td data-row="6" data-col="1"></td>
-                  <td data-row="6" data-col="2">(0.030)</td>
-                  <td data-row="6" data-col="3">(0.031)</td>
+                  <td data-row="6" data-col="2">(0.032)</td>
+                  <td data-row="6" data-col="3">(0.034)</td>
                 </tr>
                 <tr>
-                  <td data-row="7" data-col="1">Financial Loss</td>
-                  <td data-row="7" data-col="2">0.160***</td>
-                  <td data-row="7" data-col="3">0.132***</td>
+                  <td data-row="7" data-col="1">Financial loss</td>
+                  <td data-row="7" data-col="2">0.153***</td>
+                  <td data-row="7" data-col="3">0.123***</td>
                 </tr>
                 <tr>
                   <td data-row="8" data-col="1"></td>
@@ -937,14 +948,14 @@ line-height: var(--tt-line-height-footnote-tight);
                   <td data-row="8" data-col="3">(0.030)</td>
                 </tr>
                 <tr>
-                  <td data-row="9" data-col="1">Non-Financial Loss</td>
-                  <td data-row="9" data-col="2">0.117**</td>
-                  <td data-row="9" data-col="3">0.096*</td>
+                  <td data-row="9" data-col="1">Nonfinancial loss</td>
+                  <td data-row="9" data-col="2">0.115**</td>
+                  <td data-row="9" data-col="3">0.097**</td>
                 </tr>
                 <tr>
                   <td data-row="10" data-col="1"></td>
                   <td data-row="10" data-col="2">(0.041)</td>
-                  <td data-row="10" data-col="3">(0.039)</td>
+                  <td data-row="10" data-col="3">(0.037)</td>
                 </tr>
                 <tr>
                   <td data-row="11" data-col="1">Num.Obs.</td>
@@ -955,41 +966,607 @@ line-height: var(--tt-line-height-footnote-tight);
       </table>
     </div>
 <!-- hack to avoid NA insertion in last line -->
-<div id="анализ-расхождений-в-результатах-репликации-таблицы-3" class="section level2">
-<h2>Анализ расхождений в результатах репликации Таблицы 3</h2>
-<p>В ходе репликации Pooled-регрессий мы получили оценки, которые
-структурно подтверждают выводы авторов (значимый эффект для Financial
-High, Financial Loss и Non-Financial Loss), однако числовые значения
-коэффициентов отличаются от оригинальных. Например, коэффициент
-Financial Low в нашей спецификации стал незначимо отрицательным
-(-0.017), а Financial High составил 0.069 (в то время, как в статье
-0.106). Проанализировав оригинальный do-файл авторов
-(table6_immediate_rewards.do), мы выявили несколько причин
-расхождений</p>
-<p>Во-первых, в оригинальном коде авторы используют синтаксис xi: и
-оператор # без указания фактора: (all_controls)#distr. В Stata
-отсутствие префикса i. перед переменной distr приводит к тому, что
-программа рассматривает округ как непрерывную переменную (со значениями
-1, 2, 3), фактически умножая значения ковариат на 1, 2 или 3, а не
-оценивая независимые фиксированные эффекты для каждого из округов. В
-нашей репликации в R использована функция feols и оператор i(district,
-var), который оценивает индивидуальные эффекты для каждой
-подвыборки.</p>
-<p>Во-вторых, в do-файле авторы создали локальный макрос all_controls,
-включающий индикатор предмета теста (i.subject). Однако в строке,
-запускающей Pooled-регрессию, этот макрос не использовался — авторы
-прописали переменные вручную и упустили i.subject. Мы включили предмет в
-полную спецификацию, что повлияло на итоговые веса.</p>
-<p>В-третьих, размер выборки в нашей модели составил 6843 наблюдения
-вместо 6844 у авторов. Пакет fixest в R автоматически удаляет строку при
-наличии пропуска в любой из ковариат, участвующих в регрессии. В Stata
-из-за специфического умножения категорий эта строка с пропуском осталась
-в матрице, но с нулевым весом.</p>
-<p>Несмотря на эти алгоритмические расхождения, основные гипотезы статьи
-подтверждаются: небольшие финансовые вознаграждения не оказывают
-значимого влияния на успеваемость (статистически неотличимы от нуля), в
-то время как более крупные суммы и вознаграждения в виде потерь
-демонстрируют устойчивый эффект.</p>
+</div>
+<div id="анализ-полученных-результатов" class="section level2">
+<h2>Анализ полученных результатов</h2>
+<p>Репликация в R, использующая прямое взаимодействие ковариат с
+индикатором округа, позволила со 100% точностью воспроизвести
+оригинальные результаты статьи (вплоть до тысячных долей коэффициентов и
+количества наблюдений - 6843).</p>
+<p>Результаты показывают, что эффект вознаграждений зависит от их
+размера и формулировки (framing). Небольшие финансовые стимулы
+(financial low) не оказывают статистически значимого влияния на
+успеваемость (коэффициент 0,009). Однако повышение суммы до 20 долларов
+(financial high) приводит к значительному росту результатов. Наибольшую
+эффективность демонстрируют вознаграждения, сформулированные как
+потенциальная потеря (loss framing) - коэффициенты 0,153 для финансовых
+и 0,115 для нефинансовых стимулов.</p>
+</div>
+<div id="репликация-таблицы-7---влияние-отложенны-вознаграждений" class="section level2">
+<h2>Репликация таблицы 7 - влияние отложенны вознаграждений</h2>
+<p>В этой части оценивается влияние отложенных вознаграждений (выданных
+с задержкой в один месяц). Согласно методологии авторов, для этого
+используется только осенняя сессия 2010 года в округе CPS, а группа
+тритмента “Financial Low” исключается из выборки.</p>
+<pre class="r"><code># Фильтрация данных строго по логике Stata-файла
+bgs_delayed &lt;- bgs_data %&gt;%
+  filter(district == &quot;CPS&quot;, 
+         session == &quot;CPS fall&quot;, 
+         treatment != &quot;INF&quot;) %&gt;%
+  mutate(cluster_var = school_grade)
+
+# Оценка Модели 1 (без демографии)
+mod1_delayed &lt;- feols(current_score_t ~ IDH + IDT + IDLH + IDLT + 
+                        INH + INT + INLH + INLT +
+                        baseline + baseline_sq + baseline_cub + missing_baseline +
+                        i(grade) + i(school),
+                      data = bgs_delayed,
+                      cluster = ~cluster_var)
+
+# Оценка Модели 2 (с полной демографией)
+mod2_delayed &lt;- feols(current_score_t ~ IDH + IDT + IDLH + IDLT + 
+                        INH + INT + INLH + INLT +
+                        baseline + baseline_sq + baseline_cub + missing_baseline +
+                        i(grade) + i(school) +
+                        i(past_treatment) + i(ar_treatment) +
+                        black + unknown_race + iep_unknown + iep_yes + 
+                        female + gender_unknown + free_reduced +
+                        i(subject),
+                      data = bgs_delayed,
+                      cluster = ~cluster_var)
+
+# Вывод таблицы
+modelsummary(
+  list(&quot;Model 1&quot; = mod1_delayed, &quot;Model 2&quot; = mod2_delayed),
+  coef_map = c(&quot;IDH&quot; = &quot;Delayed Financial High&quot;,
+               &quot;IDT&quot; = &quot;Delayed Non-Financial&quot;,
+               &quot;IDLH&quot; = &quot;Delayed Financial Loss&quot;,
+               &quot;IDLT&quot; = &quot;Delayed Non-Financial Loss&quot;),
+  gof_map = c(&quot;nobs&quot;, &quot;n.clusters&quot;),
+  stars = TRUE
+)</code></pre>
+<!-- preamble start -->
+
+    <script>// TinyTable JavaScript Framework
+// Function factory for creating table-specific operations
+window.TinyTable = {
+  // Helper to create Tabulator instance with Luxon dependency
+  createTabulator: function(elementId, config) {
+    const { DateTime } = window.luxon || {};
+    return new Tabulator(elementId, {
+      dependencies: { DateTime },
+      ...config
+    });
+  },
+
+  createTableFunctions: function (tableId) {
+    const spans = []; // {top, left, rowspan, colspan}
+
+    function resolveToAnchor(i, j) {
+      // find if (i,j) is inside any span; return that span's anchor if so
+      for (const s of spans) {
+        if (
+          i >= s.top && i < s.top + s.rowspan &&
+          j >= s.left && j < s.left + s.colspan
+        ) {
+          return { i: s.top, j: s.left };
+        }
+      }
+      return { i, j };
+    }
+
+    return {
+      styleCell: function (i, j, css_id) {
+        // normalize possible string indices
+        i = +i; j = +j;
+
+        const table = document.getElementById(tableId);
+        const { i: ai, j: aj } = resolveToAnchor(i, j);
+        const cell = table.querySelector(`[data-row="${ai}"][data-col="${aj}"]`);
+        if (!cell) return; // silently skip if not found (e.g., removed)
+        cell.classList.add(css_id);
+      },
+
+      spanCell: function (i, j, rowspan, colspan) {
+        i = +i; j = +j;
+
+        const table = document.getElementById(tableId);
+        const targetCell = table.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+        if (!targetCell) {
+          console.warn(`Cell at (${i}, ${j}) not found.`);
+          return;
+        }
+
+        // record span so future styleCell calls map to the anchor
+        spans.push({ top: i, left: j, rowspan, colspan });
+
+        // remove covered cells (except anchor)
+        const cellsToRemove = [];
+        for (let r = 0; r < rowspan; r++) {
+          for (let c = 0; c < colspan; c++) {
+            if (r === 0 && c === 0) continue;
+            const cell = table.querySelector(`[data-row="${i + r}"][data-col="${j + c}"]`);
+            if (cell) cellsToRemove.push(cell);
+          }
+        }
+        cellsToRemove.forEach(cell => cell.remove());
+
+        // set HTML attributes for clarity/serialization
+        targetCell.setAttribute('rowspan', rowspan);
+        targetCell.setAttribute('colspan', colspan);
+      }
+    };
+  }
+};
+
+// =============================================================================
+// TABULATOR CUSTOM FORMATTERS (revised)
+// =============================================================================
+
+// SVG sparkline
+function tinytable_sparkline(cell, p = {}) {
+  let values = cell.getValue() ?? [];
+  if (!Array.isArray(values)) values = [values];
+  // coerce to finite numbers & strip NaNs
+  values = values.map(Number).filter(Number.isFinite);
+  const n = values.length;
+  if (n === 0) return "";
+
+  const w = p.width ?? 120, h = p.height ?? 30, pad = p.pad ?? 2;
+  const color = p.color ?? "currentColor", sw = p.strokeWidth ?? 1.5;
+  const fill = p.fillArea ?? false;
+  const showDots = p.showDots ?? false;
+  const dotR = p.dotRadius ?? 1.75;
+  const ariaLabel = p.ariaLabel ?? `sparkline with ${n} points`;
+
+  // single pass for min/max
+  let min = Infinity, max = -Infinity;
+  for (let v of values) { if (v < min) min = v; if (v > max) max = v; }
+  const span = (max - min) || 1;
+
+  const x = i => pad + (i * (w - 2 * pad)) / Math.max(n - 1, 1);
+  const y = v => h - pad - ((v - min) * (h - 2 * pad)) / span;
+
+  let d = `M ${x(0)},${y(values[0])}`;
+  for (let i = 1; i < n; i++) d += ` L ${x(i)},${y(values[i])}`;
+
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("width", w);
+  svg.setAttribute("height", h);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", ariaLabel);
+
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("stroke", color);
+  path.setAttribute("stroke-width", sw);
+  path.setAttribute("vector-effect", "non-scaling-stroke");
+
+  if (fill) {
+    const area = document.createElementNS(NS, "path");
+    area.setAttribute("d", d + ` L ${x(n - 1)},${h - pad} L ${x(0)},${h - pad} Z`);
+    area.setAttribute("fill", color);
+    area.setAttribute("fill-opacity", p.fillOpacity ?? 0.25);
+    svg.appendChild(area);
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+  } else {
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+  }
+  svg.appendChild(path);
+
+  if (showDots) {
+    const dot = (i) => {
+      const c = document.createElementNS(NS, "circle");
+      c.setAttribute("cx", x(i));
+      c.setAttribute("cy", y(values[i]));
+      c.setAttribute("r", dotR);
+      c.setAttribute("fill", color);
+      return c;
+    };
+    if (p.dots === "end") svg.appendChild(dot(n - 1));
+    else if (p.dots === "minmax") {
+      const iMin = values.indexOf(min), iMax = values.indexOf(max);
+      svg.appendChild(dot(iMin)); svg.appendChild(dot(iMax));
+    } else if (p.dots === true) {
+      for (let i = 0; i < n; i++) svg.appendChild(dot(i));
+    }
+  }
+
+  if (p.title) {
+    const title = document.createElementNS(NS, "title");
+    title.textContent = p.title;
+    svg.appendChild(title);
+  }
+
+  return svg;
+}
+
+// Canvas histogram
+function tinytable_histogram(cell, p = {}) {
+  let data = cell.getValue() ?? [];
+  if (!Array.isArray(data)) data = [data];
+  data = data.map(Number).filter(Number.isFinite);
+  const n = data.length;
+  if (n === 0) return "";
+
+  const cssWidth = p.width ?? 120;
+  const cssHeight = p.height ?? 30;
+  const color = p.color ?? "currentColor";
+  const gap = p.gap ?? 1;         // px gap between bars
+  const pad = p.pad ?? 0;         // inner padding
+  const ariaLabel = p.ariaLabel ?? `histogram with ${n} observations`;
+
+  // robust bins: Sturges as default; allow override
+  const k = Math.max(1, Math.min(64, p.bins ?? Math.ceil(Math.log2(n) + 1)));
+
+  // stats
+  let min = Infinity, max = -Infinity;
+  for (let v of data) { if (v < min) min = v; if (v > max) max = v; }
+
+  // zero-range safeguard -> single centered bar
+  const range = max - min;
+  const binWidth = range > 0 ? range / k : 1;
+
+  const bins = new Array(k).fill(0);
+  if (range === 0) {
+    // put all mass in the middle bin
+    bins[Math.floor(k / 2)] = n;
+  } else {
+    for (let v of data) {
+      let idx = Math.floor((v - min) / binWidth);
+      if (idx >= k) idx = k - 1; // clamp max edge
+      bins[idx]++;
+    }
+  }
+  const maxCount = Math.max(...bins, 1);
+
+  // HiDPI / Retina crispness
+  const dpr = window.devicePixelRatio || 1;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+  canvas.style.width = cssWidth + "px";
+  canvas.style.height = cssHeight + "px";
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", ariaLabel);
+
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.fillStyle = color;
+
+  const innerW = cssWidth - pad * 2;
+  const innerH = cssHeight - pad * 2;
+  const barW = innerW / k;
+
+  for (let i = 0; i < k; i++) {
+    const h = (bins[i] / maxCount) * innerH;
+    const x = pad + i * barW;
+    const y = cssHeight - pad - h;
+    // 0.5 translate helps crisp vertical edges on some displays
+    ctx.fillRect(Math.round(x) + 0.5, Math.floor(y), Math.max(0, barW - gap), Math.ceil(h));
+  }
+
+  if (p.title) canvas.title = p.title;
+  return canvas;
+}
+
+// Unified sorter that uses hidden rank field
+function tinytable_rank_sorter(a, b, aRow, bRow, column, dir, sorterParams) {
+  const rankField = sorterParams.rankField;
+  const aVal = aRow.getData()[rankField] || 0;
+  const bVal = bRow.getData()[rankField] || 0;
+  return aVal - bVal;
+}
+</script>
+
+    <script>
+      // Create table-specific functions using external factory
+      const tableFns_w3ah4smr9ii6yeugqljk = TinyTable.createTableFunctions("tinytable_w3ah4smr9ii6yeugqljk");
+      // tinytable span after
+      window.addEventListener('load', function () {
+          var cellsToStyle = [
+            // tinytable style arrays after
+          { positions: [ { i: '9', j: 2 }, { i: '9', j: 3 } ], css_id: 'tinytable_css_14ubvkqevq0ljs72j761',}, 
+          { positions: [ { i: '8', j: 2 }, { i: '8', j: 3 } ], css_id: 'tinytable_css_vivsewvu3k74bwtnpu51',}, 
+          { positions: [ { i: '1', j: 2 }, { i: '2', j: 2 }, { i: '3', j: 2 }, { i: '4', j: 2 }, { i: '5', j: 2 }, { i: '6', j: 2 }, { i: '7', j: 2 }, { i: '1', j: 3 }, { i: '2', j: 3 }, { i: '3', j: 3 }, { i: '4', j: 3 }, { i: '5', j: 3 }, { i: '6', j: 3 }, { i: '7', j: 3 } ], css_id: 'tinytable_css_iy4kyq40q0hhjo3466cw',}, 
+          { positions: [ { i: '0', j: 2 }, { i: '0', j: 3 } ], css_id: 'tinytable_css_h29rnwq0oj6hmjrq45kl',}, 
+          { positions: [ { i: '9', j: 1 } ], css_id: 'tinytable_css_e8eoc45bzxz2r1o6s1yw',}, 
+          { positions: [ { i: '8', j: 1 } ], css_id: 'tinytable_css_djcgoiibira4rrvxpmsx',}, 
+          { positions: [ { i: '1', j: 1 }, { i: '2', j: 1 }, { i: '3', j: 1 }, { i: '4', j: 1 }, { i: '5', j: 1 }, { i: '6', j: 1 }, { i: '7', j: 1 } ], css_id: 'tinytable_css_zur3y27rqf66l2bansf0',}, 
+          { positions: [ { i: '0', j: 1 } ], css_id: 'tinytable_css_peg9eidct0q3n260lyen',}, 
+          ];
+
+          // Loop over the arrays to style the cells
+          cellsToStyle.forEach(function (group) {
+              group.positions.forEach(function (cell) {
+                  tableFns_w3ah4smr9ii6yeugqljk.styleCell(cell.i, cell.j, group.css_id);
+              });
+          });
+      });
+    </script>
+
+    <style type="text/css">
+
+
+.tinytable {
+
+--tt-text-color: inherit;
+--tt-line-color: black;
+--tt-border-color: var(--tt-line-color);
+--tt-striped-bg: rgba(0, 0, 0, .05);
+--tt-hover-bg: rgba(0, 0, 0, .075);
+--tt-background-color: transparent;
+--tt-footnote-bg: var(--tt-background-color);
+
+--tt-cell-padding: .5rem;
+--tt-cell-padding-sm: calc(var(--tt-cell-padding) / 2);
+--tt-table-margin: .5rem 0;
+--tt-caption-padding: .5rem 0;
+--tt-footnote-padding: .2rem .5rem;
+--tt-footnote-first-padding-top: .5rem;
+--tt-footnote-gap: .1rem;
+--tt-container-padding: 10px;
+
+--tt-font-size-footnote: 0.875rem;
+--tt-font-size-caption: 1rem;
+--tt-font-size-sup: 0.75em;
+--tt-line-height-footnote: 1.25;
+--tt-line-height-footnote-tight: 1.2;
+--tt-font-weight-header: normal;
+
+--tt-cell-valign: top;
+--tt-header-align: left;
+--tt-header-valign: bottom;
+--tt-caption-align: var(--tt-header-align);
+--tt-caption-side: top;
+
+--tt-table-width: 100%;
+
+--tt-border-width: 1px;
+--tt-border-width-tbody: 2px;
+}
+
+.tinytable {
+width: var(--tt-table-width);
+margin: var(--tt-table-margin);
+border-collapse: collapse;
+background-color: var(--tt-background-color);
+color: var(--tt-text-color);
+font-family: inherit;
+-webkit-font-smoothing: antialiased;
+-moz-osx-font-smoothing: grayscale;
+}
+.tinytable *:not(mjx-container):not(mjx-container *) {
+font-family: inherit;
+}
+
+.tinytable th,
+.tinytable td {
+position: relative;
+padding: var(--tt-cell-padding);
+vertical-align: var(--tt-cell-valign);
+}
+.tinytable thead th {
+text-align: var(--tt-header-align);
+vertical-align: var(--tt-header-valign);
+font-weight: var(--tt-font-weight-header);
+border-bottom: none;
+}
+.tinytable thead th[align="center"] {
+text-align: center;
+}
+.tinytable tbody + tbody {
+border-top: var(--tt-border-width-tbody) solid var(--tt-border-color);
+}
+
+
+.tinytable-sm th,
+.tinytable-sm td {
+padding: var(--tt-cell-padding-sm);
+}
+
+.tinytable-bordered {
+border: var(--tt-border-width) solid var(--tt-border-color);
+}
+.tinytable-bordered th,
+.tinytable-bordered td {
+border: var(--tt-border-width) solid var(--tt-border-color);
+}
+
+.tinytable-striped tbody tr:nth-of-type(odd) {
+background-color: var(--tt-striped-bg);
+}
+
+.tinytable-hover tbody tr:hover {
+background-color: var(--tt-hover-bg);
+}
+
+.tinytable-responsive {
+width: var(--tt-table-width);
+overflow-x: auto;
+-webkit-overflow-scrolling: touch;
+}
+
+.tinytable :is(td, th)[class*="tinytable_css_"] {
+position: relative;
+
+--border-top: 0;
+--border-right: 0;
+--border-bottom: 0;
+--border-left: 0;
+
+--line-color-top: currentColor;
+--line-color-right: currentColor;
+--line-color-bottom: currentColor;
+--line-color-left: currentColor;
+
+--line-width-top: 0.1em;
+--line-width-right: 0.1em;
+--line-width-bottom: 0.1em;
+--line-width-left: 0.1em;
+
+--trim-top-left: 0%;
+--trim-top-right: 0%;
+--trim-right-top: 0%;
+--trim-right-bottom: 0%;
+--trim-bottom-left: 0%;
+--trim-bottom-right: 0%;
+--trim-left-top: 0%;
+--trim-left-bottom: 0%;
+}
+
+.tinytable :is(td, th)[class*="tinytable_css_"]::before {
+content: "";
+position: absolute;
+top: var(--trim-top-left, var(--trim-top-right, 0));
+left: var(--trim-left-top, 0);
+right: var(--trim-right-top, 0);
+bottom: 0;
+pointer-events: none;
+z-index: 1;
+border-top: calc(var(--border-top) * var(--line-width-top)) solid var(--line-color-top);
+border-right: calc(var(--border-right) * var(--line-width-right)) solid var(--line-color-right);
+border-left: calc(var(--border-left) * var(--line-width-left)) solid var(--line-color-left);
+}
+
+.tinytable :is(td, th)[class*="tinytable_css_"]::after {
+content: "";
+position: absolute;
+left: var(--trim-bottom-left, 0);
+right: var(--trim-bottom-right, 0);
+bottom: var(--trim-left-bottom, var(--trim-right-bottom, 0));
+height: calc(var(--border-bottom) * var(--line-width-bottom));
+background: var(--line-color-bottom);
+pointer-events: none;
+z-index: 2;
+}
+
+.tinytable-container {
+padding: var(--tt-container-padding);
+overflow-x: auto;
+overflow-y: auto;
+width: auto;
+height: auto;
+}
+
+.tinytable caption {
+padding: var(--tt-caption-padding);
+caption-side: var(--tt-caption-side);
+font-size: var(--tt-font-size-caption);
+text-align: var(--tt-caption-align);
+}
+
+.tinytable tfoot tr:first-child td {
+padding-top: var(--tt-footnote-first-padding-top);
+}
+.tinytable tfoot td {
+padding: var(--tt-footnote-padding);
+font-size: var(--tt-font-size-footnote);
+line-height: var(--tt-line-height-footnote);
+background-color: var(--tt-footnote-bg);
+}
+
+.tinytable tfoot tr + tr td {
+padding-top: var(--tt-footnote-gap);
+}
+
+.tinytable tfoot sup {
+font-size: var(--tt-font-size-sup);
+line-height: 0;
+vertical-align: text-top;
+}
+
+.tinytable tfoot tr:nth-child(n+2) td {
+line-height: var(--tt-line-height-footnote-tight);
+}
+</style>
+    <style>
+
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_14ubvkqevq0ljs72j761, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_14ubvkqevq0ljs72j761 { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.08em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_vivsewvu3k74bwtnpu51, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_vivsewvu3k74bwtnpu51 { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_iy4kyq40q0hhjo3466cw, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_iy4kyq40q0hhjo3466cw { text-align: center }
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_h29rnwq0oj6hmjrq45kl, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_h29rnwq0oj6hmjrq45kl { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 1; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.08em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: center }
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_e8eoc45bzxz2r1o6s1yw, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_e8eoc45bzxz2r1o6s1yw { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.08em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_djcgoiibira4rrvxpmsx, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_djcgoiibira4rrvxpmsx { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 0; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.1em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_zur3y27rqf66l2bansf0, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_zur3y27rqf66l2bansf0 { text-align: left }
+#tinytable_w3ah4smr9ii6yeugqljk td.tinytable_css_peg9eidct0q3n260lyen, #tinytable_w3ah4smr9ii6yeugqljk th.tinytable_css_peg9eidct0q3n260lyen { position: relative; --border-bottom: 1; --border-left: 0; --border-right: 0; --border-top: 1; --line-color-bottom: var(--tt-line-color); --line-color-left: var(--tt-line-color); --line-color-right: var(--tt-line-color); --line-color-top: var(--tt-line-color); --line-width-bottom: 0.05em; --line-width-left: 0.1em; --line-width-right: 0.1em; --line-width-top: 0.08em; --trim-bottom-left: 0%; --trim-bottom-right: 0%; --trim-left-bottom: 0%; --trim-left-top: 0%; --trim-right-bottom: 0%; --trim-right-top: 0%; --trim-top-left: 0%; --trim-top-right: 0%; ; text-align: left }
+</style>
+    <div class="container">
+      <table class="tinytable" id="tinytable_w3ah4smr9ii6yeugqljk" style="width: auto; margin-left: auto; margin-right: auto;" data-quarto-disable-processing="true">
+        
+        <thead>
+              <tr>
+                <th scope="col" data-row="0" data-col="1"> </th>
+                <th scope="col" data-row="0" data-col="2">Model 1</th>
+                <th scope="col" data-row="0" data-col="3">Model 2</th>
+              </tr>
+        </thead>
+        <tfoot><tr><td colspan="3">+ p &lt; 0.1, * p &lt; 0.05, ** p &lt; 0.01, *** p &lt; 0.001</td></tr></tfoot>
+        <tbody>
+                <tr>
+                  <td data-row="1" data-col="1">Delayed Financial High</td>
+                  <td data-row="1" data-col="2">-0.029</td>
+                  <td data-row="1" data-col="3">-0.050</td>
+                </tr>
+                <tr>
+                  <td data-row="2" data-col="1"></td>
+                  <td data-row="2" data-col="2">(0.104)</td>
+                  <td data-row="2" data-col="3">(0.103)</td>
+                </tr>
+                <tr>
+                  <td data-row="3" data-col="1">Delayed Non-Financial</td>
+                  <td data-row="3" data-col="2">0.033</td>
+                  <td data-row="3" data-col="3">0.042</td>
+                </tr>
+                <tr>
+                  <td data-row="4" data-col="1"></td>
+                  <td data-row="4" data-col="2">(0.046)</td>
+                  <td data-row="4" data-col="3">(0.052)</td>
+                </tr>
+                <tr>
+                  <td data-row="5" data-col="1">Delayed Financial Loss</td>
+                  <td data-row="5" data-col="2">0.181</td>
+                  <td data-row="5" data-col="3">0.222</td>
+                </tr>
+                <tr>
+                  <td data-row="6" data-col="1"></td>
+                  <td data-row="6" data-col="2">(0.123)</td>
+                  <td data-row="6" data-col="3">(0.150)</td>
+                </tr>
+                <tr>
+                  <td data-row="7" data-col="1">Delayed Non-Financial Loss</td>
+                  <td data-row="7" data-col="2">-0.051</td>
+                  <td data-row="7" data-col="3">-0.005</td>
+                </tr>
+                <tr>
+                  <td data-row="8" data-col="1"></td>
+                  <td data-row="8" data-col="2">(0.100)</td>
+                  <td data-row="8" data-col="3">(0.100)</td>
+                </tr>
+                <tr>
+                  <td data-row="9" data-col="1">Num.Obs.</td>
+                  <td data-row="9" data-col="2">2052</td>
+                  <td data-row="9" data-col="3">2052</td>
+                </tr>
+        </tbody>
+      </table>
+    </div>
+<!-- hack to avoid NA insertion in last line -->
+</div>
+<div id="анализ-результатов-таблицы-7" class="section level2">
+<h2>Анализ результатов таблицы 7</h2>
+<p>Результаты оценки отложенных вознаграждений в репликации полностью
+совпали с финальной опубликованной версией статьи. Размер выборки
+составил ровно 2052 наблюдения. Незначимость всех коэффициентов
+подтверждает гипотезу о наличии у школьников гиперболического
+дисконтирования. Ученики настолько сильно дисконтируют будущие выгоды,
+что задержка вознаграждения всего на один месяц полностью нивелирует его
+стимулирующий эффект. Усилия на тесте остаются на базовом контрольном
+уровне.</p>
 </div>
 
 

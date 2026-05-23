@@ -1,0 +1,83 @@
+---
+title: "Отчет по репликации статьи The Behavioralist Goes to School"
+output: html_document
+date: "2026-05-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+#install.packages(c("tidyverse", "haven", "fixest", "modelsummary"))
+library(tidyverse)    # Для манипуляций с данными
+library(haven)        # Для чтения .dta файлов
+library(fixest)       # Для быстрых регрессий и кластеризованных ошибок
+library(modelsummary) # Для создания красивых таблиц
+
+# Читаем данные
+bgs_data <- read_dta("data/all_BGS_data.dta")
+
+#Выводим размерность
+dim(bgs_data)
+
+#Оставляем только нужные тритменты
+treatments_to_keep <- c("INC", "IDC", "NS", "CSM", "INF", "INH", "INT", "INLH", "INLT")
+
+bgs_filtered <- bgs_data %>%
+  filter(treatment %in% treatments_to_keep) %>%
+  # Создаем переменную для кластеризации: school_grade для CPS/CH, class для Bloom
+  mutate(
+    cluster_var = if_else(district %in% c("CPS", "CH"), school_grade, class)
+  )
+
+# Проверяем, сколько наблюдений осталось
+nrow(bgs_filtered)
+
+# Определяем формулы, как в Stata. 
+# fixest сам создаст дамми для факторных переменных.
+
+# Модель 1 - без расширенной демографии
+mod1 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
+                i(district, session) + i(district, grade) + i(district, school) +
+                i(district, baseline) + i(district, baseline_sq) + i(district, baseline_cub) + i(district, missing_baseline),
+              data = bgs_filtered, 
+              cluster = ~cluster_var)
+
+# Модель 2 - с расширенной демографией и историей
+mod2 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
+                i(district, session) + i(district, grade) + i(district, school) +
+                i(district, baseline) + i(district, baseline_sq) + i(district, baseline_cub) + i(district, missing_baseline) +
+                i(district, past_treatment) + i(district, ar_treatment) +
+                i(district, black) + i(district, hispanic) + i(district, unknown_race) + 
+                i(district, iep_unknown) + i(district, iep_yes) + 
+                i(district, female) + i(district, gender_unknown) + i(district, free_reduced) +
+                i(district, subject),
+              data = bgs_filtered, 
+              cluster = ~cluster_var)
+
+# Выводим таблицу для проверки
+modelsummary(
+  list("Model 1 (No Covariates)" = mod1, "Model 2 (With Covariates)" = mod2),
+  coef_map = c("INF" = "Financial Low", 
+               "INH" = "Financial High",
+               "INT" = "Non-Financial",
+               "INLH" = "Financial Loss",
+               "INLT" = "Non-Financial Loss"),
+  gof_map = c("nobs", "n.clusters"),
+  stars = TRUE
+)
+```
+
+
+## Анализ расхождений в результатах репликации Таблицы 3
+
+В ходе репликации Pooled-регрессий мы получили оценки, которые структурно подтверждают выводы авторов (значимый эффект для Financial High, Financial Loss и Non-Financial Loss), однако числовые значения коэффициентов отличаются от оригинальных. Например, коэффициент Financial Low в нашей спецификации стал незначимо отрицательным (-0.017), а Financial High составил 0.069 (в то время, как в статье 0.106). Проанализировав оригинальный do-файл авторов (table6_immediate_rewards.do), мы выявили несколько причин расхождений
+
+Во-первых, в оригинальном коде авторы используют синтаксис xi: и оператор # без указания фактора: (all_controls)#distr. В Stata отсутствие префикса i. перед переменной distr приводит к тому, что программа рассматривает округ как непрерывную переменную (со значениями 1, 2, 3), фактически умножая значения ковариат на 1, 2 или 3, а не оценивая независимые фиксированные эффекты для каждого из округов. В нашей репликации в R использована функция feols и оператор i(district, var), который оценивает индивидуальные эффекты для каждой подвыборки. 
+
+Во-вторых, в do-файле авторы создали локальный макрос all_controls, включающий индикатор предмета теста (i.subject). Однако в строке, запускающей Pooled-регрессию, этот макрос не использовался — авторы прописали переменные вручную и упустили i.subject. Мы включили предмет в полную спецификацию, что повлияло на итоговые веса.
+
+В-третьих, размер выборки в нашей модели составил 6843 наблюдения вместо 6844 у авторов. Пакет fixest в R автоматически удаляет строку при наличии пропуска в любой из ковариат, участвующих в регрессии. В Stata из-за специфического умножения категорий эта строка с пропуском осталась в матрице, но с нулевым весом.
+
+Несмотря на эти алгоритмические расхождения, основные гипотезы статьи подтверждаются: небольшие финансовые вознаграждения не оказывают значимого влияния на успеваемость (статистически неотличимы от нуля), в то время как более крупные суммы и вознаграждения в виде потерь демонстрируют устойчивый эффект.

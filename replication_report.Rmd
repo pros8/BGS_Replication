@@ -237,3 +237,172 @@ modelsummary(
 Сравнение оценок в Панели B успешно воспроизводит результаты авторов: стимулирующий эффект вознаграждений существенно зависит от сдаваемого предмета. 
 
 Тесты по математике демонстрируют колоссальную чувствительность к стимулам. Коэффициенты Financial high (0.246) и Financial loss (0.299) являются значимыми. В то же время влияние стимулов на тесты по чтению (reading) значительно слабее (0.052 и 0.102 соответственно). Математические навыки требуют концентрации и более чувствительны к краткосрочным всплескам усилий, тогда как результаты по чтению в большей степени зависят от накопленного долгосрочного знания и меньше поддаются моментальному воздействию.
+
+
+## Репликация таблицы 10
+```{r table10_code}
+# подготовка данных
+bgs_gender <- bgs_filtered %>%
+  mutate(distr = as.numeric(as.factor(district))) %>%
+  # заменяем NA на 0 только для числовых ковариат
+  mutate(across(c(baseline, baseline_sq, baseline_cub, missing_baseline,
+                  black, hispanic, unknown_race, iep_unknown, iep_yes,
+                  free_reduced), ~replace_na(.x, 0)))
+
+# формула для Pooled
+# все категориальные переменные (i.) перенесены за знак `|` как фиксированные эффекты.
+# знак `^` означает взаимодействие, создавая эффект для каждого округа.
+fmla_pool_gender <- current_score_t ~ INF + INH + INT + INLH + INLT +
+  district:baseline + district:missing_baseline + district:baseline_sq + district:baseline_cub +
+  district:black + district:hispanic + district:unknown_race + 
+  district:iep_unknown + district:iep_yes + district:free_reduced |
+  district^session + district^grade + district^school + district^subject + 
+  district^past_treatment + district^ar_treatment
+
+# формула для отдельных округов (Bloom, CH, CPS)
+fmla_single_gender <- current_score_t ~ INF + INH + INT + INLH + INLT +
+  baseline + missing_baseline + baseline_sq + baseline_cub +
+  black + hispanic + unknown_race + iep_unknown + iep_yes + free_reduced |
+  session + grade + school + subject + past_treatment + ar_treatment
+
+# регрессии (используем female == 0 для Male и 1 для Female) 
+# Pooled
+mod_pool_male <- feols(fmla_pool_gender, data = filter(bgs_gender, female == 0), cluster = ~cluster_var)
+mod_pool_fem  <- feols(fmla_pool_gender, data = filter(bgs_gender, female == 1), cluster = ~cluster_var)
+
+# Bloom
+mod_bloom_male <- feols(fmla_single_gender, data = filter(bgs_gender, district == "Bloom" & female == 0), cluster = ~cluster_var)
+mod_bloom_fem  <- feols(fmla_single_gender, data = filter(bgs_gender, district == "Bloom" & female == 1), cluster = ~cluster_var)
+
+# Chicago Heights
+mod_ch_male <- feols(fmla_single_gender, data = filter(bgs_gender, district == "CH" & female == 0), cluster = ~cluster_var)
+mod_ch_fem  <- feols(fmla_single_gender, data = filter(bgs_gender, district == "CH" & female == 1), cluster = ~cluster_var)
+
+# CPS
+mod_cps_male <- feols(fmla_single_gender, data = filter(bgs_gender, district == "CPS" & female == 0), cluster = ~cluster_var)
+mod_cps_fem  <- feols(fmla_single_gender, data = filter(bgs_gender, district == "CPS" & female == 1), cluster = ~cluster_var)
+
+# Вывод таблицы
+modelsummary(
+  list("Pool Male" = mod_pool_male, "Pool Fem" = mod_pool_fem,
+       "Bloom Male" = mod_bloom_male, "Bloom Fem" = mod_bloom_fem,
+       "CH Male" = mod_ch_male, "CH Fem" = mod_ch_fem,
+       "CPS Male" = mod_cps_male, "CPS Fem" = mod_cps_fem),
+  coef_map = c("INF" = "Financial low", "INH" = "Financial high", "INT" = "Nonfinancial",
+               "INLH" = "Financial loss", "INLT" = "Nonfinancial loss"),
+  gof_map = c("nobs", "n.clusters"),
+  stars = TRUE
+)
+```
+
+### Анализ результатов по полу (таблица 10)
+
+Репликация эффектов в зависимости от пола учеников показывает, что существенных и системных различий в реакции на вознаграждения между мальчиками и девочками не наблюдается. В объединенной выборке (панель A) обе группы демонстрируют схожую чувствительность к крупным финансовым стимулам (financial high) и потенциальным потерям (financial loss). Гиперболическое дисконтирование и неприятие потерь работают в условиях образовательных тестов независимо от гендерных характеристик школьников.
+
+
+## Репликация таблицы 11
+```{r table11_code}
+library(lubridate)
+
+# подготовка дат и переменных исходов с учетом пустых строк ("")
+bgs_future <- bgs_data %>%
+  filter(treatment %in% treatments_to_keep, district %in% c("CPS", "Bloom")) %>%
+  mutate(cluster_var = if_else(district == "CPS", school_grade, class)) %>%
+  mutate(
+    math_first = case_when(
+      session == "CPS fall" & (is.na(mt_test_date_fall) | mt_test_date_fall == "" | is.na(rd_test_date_fall) | rd_test_date_fall == "") ~ NA_real_,
+      session == "CPS fall" & (mdy(mt_test_date_fall) < mdy(rd_test_date_fall)) ~ 1,
+      session == "CPS fall" ~ 0,
+      session == "CPS winter" & (is.na(mt_test_date_winter) | mt_test_date_winter == "" | is.na(rd_test_date_winter) | rd_test_date_winter == "") ~ NA_real_,
+      session == "CPS winter" & (mdy(mt_test_date_winter) < mdy(rd_test_date_winter)) ~ 1,
+      session == "CPS winter" ~ 0,
+      TRUE ~ 0
+    ),
+    other_test_score = case_when(
+      session == "CPS fall" & subject == "reading" & math_first == 0 ~ std_mt_fall,
+      session == "CPS fall" & subject == "math" & math_first == 1 ~ std_rd_fall,
+      session == "CPS winter" & subject == "reading" & math_first == 0 ~ std_mt_winter,
+      session == "CPS winter" & subject == "math" & math_first == 1 ~ std_rd_winter,
+      TRUE ~ NA_real_
+    ),
+    baseline2 = case_when(
+      session == "CPS fall" & subject == "reading" & math_first == 0 ~ std_mt_spring_previous_year,
+      session == "CPS fall" & subject == "math" & math_first == 1 ~ std_rd_spring_previous_year,
+      session == "CPS winter" & subject == "reading" & math_first == 0 ~ std_mt_fall,
+      session == "CPS winter" & subject == "math" & math_first == 1 ~ std_rd_fall,
+      TRUE ~ NA_real_
+    ),
+    missing_baseline2 = if_else(is.na(baseline2), 1, 0),
+    baseline2 = if_else(is.na(baseline2), 0, baseline2),
+    baseline_sq2 = baseline2^2,
+    baseline_cub2 = baseline2^3
+  ) %>%
+  mutate(future_treatment = if_else(is.na(future_treatment) | future_treatment == "", "0", as.character(future_treatment))) %>%
+  mutate(across(c(baseline, baseline_sq, baseline_cub, missing_baseline,
+                  black, hispanic, unknown_race, iep_unknown, iep_yes,
+                  female, gender_unknown, free_reduced), ~replace_na(.x, 0)))
+
+# формулы для 6 колонок (категориальные факторы вынесены за `|`)
+
+# 1-2. Bloom:
+fmla_subseq_bloom_1 <- subsequent_test_score ~ INF + INH + 
+  baseline + missing_baseline + baseline_sq + baseline_cub |
+  session + grade + school + future_treatment
+
+fmla_subseq_bloom_2 <- subsequent_test_score ~ INF + INH + 
+  baseline + missing_baseline + baseline_sq + baseline_cub +
+  black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced |
+  session + grade + school + subject + past_treatment + ar_treatment + future_treatment
+
+# 3-4. CPS:
+fmla_subseq_cps_1 <- subsequent_test_score ~ INF + INH + INT + INLH + INLT + 
+  baseline + missing_baseline + baseline_sq + baseline_cub |
+  session + grade + school + future_treatment
+
+fmla_subseq_cps_2 <- subsequent_test_score ~ INF + INH + INT + INLH + INLT + 
+  baseline + missing_baseline + baseline_sq + baseline_cub +
+  black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced |
+  session + grade + school + subject + past_treatment + ar_treatment + future_treatment
+
+# 5-6. CPS:
+fmla_other_cps_1 <- other_test_score ~ INF + INH + INT + INLH + INLT + 
+  baseline2 + missing_baseline2 + baseline_sq2 + baseline_cub2 |
+  session + grade + school 
+
+fmla_other_cps_2 <- other_test_score ~ INF + INH + INT + INLH + INLT + 
+  baseline2 + missing_baseline2 + baseline_sq2 + baseline_cub2 +
+  black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced |
+  session + grade + school + subject + past_treatment + ar_treatment
+
+# Регрессии
+mod_bloom_sub_1 <- feols(fmla_subseq_bloom_1, data = filter(bgs_future, district == "Bloom"), cluster = ~cluster_var)
+mod_bloom_sub_2 <- feols(fmla_subseq_bloom_2, data = filter(bgs_future, district == "Bloom"), cluster = ~cluster_var)
+
+mod_cps_sub_1 <- feols(fmla_subseq_cps_1, data = filter(bgs_future, district == "CPS"), cluster = ~cluster_var)
+mod_cps_sub_2 <- feols(fmla_subseq_cps_2, data = filter(bgs_future, district == "CPS"), cluster = ~cluster_var)
+
+mod_cps_other_1 <- feols(fmla_other_cps_1, data = filter(bgs_future, district == "CPS"), cluster = ~cluster_var)
+mod_cps_other_2 <- feols(fmla_other_cps_2, data = filter(bgs_future, district == "CPS"), cluster = ~cluster_var)
+
+# Вывод таблицы
+modelsummary(
+  list("(1) Bloom Sub" = mod_bloom_sub_1, "(2) Bloom Sub" = mod_bloom_sub_2,
+       "(3) CPS Sub" = mod_cps_sub_1, "(4) CPS Sub" = mod_cps_sub_2,
+       "(5) CPS Other" = mod_cps_other_1, "(6) CPS Other" = mod_cps_other_2),
+  coef_map = c("INF" = "Financial low", "INH" = "Financial high", "INT" = "Nonfinancial",
+               "INLH" = "Financial loss", "INLT" = "Nonfinancial loss"),
+  gof_map = c("nobs", "n.clusters"),
+  stars = TRUE
+)
+```
+
+
+### Анализ результатов Таблицы 11
+
+Репликация эффектов спилловера успешно воспроизводит оригинальную структуру из 6 моделей и подтверждает выводы авторов. Мы проверяем две потенциальные угрозы применения стимулов: 
+1) не падает ли успеваемость в будущем, когда стимулы отменяются? (Колонки 1-4);
+2) не перераспределяют ли ученики усилия в ущерб другому предмету в тот же день? (Колонки 5-6).
+
+Все оценки коэффициентов, как без демографических контролей, так и с ними, статистически незначимы. Это означает, что применение внешних вознаграждений не вытесняет внутреннюю мотивацию и не наносит ущерба изучению смежных дисциплин. В совокупности это делает использование стимулов безопасным инструментом образовательной политики в краткосрочной перспективе.
+
+В моделях оценки влияния на другие предметы (Other Subject) наша выборка составила 4599 наблюдений вместо 4600 в оригинале. После анализа файла ".do" для 11 таблицы (в т.ч. с использованием LLM-модели), мы пришли к выводу, что расхождение в 1 наблюдение связано с  разницей в обработке пропущенных значений дат между R и Stata. При вычислении индикатора первенства предмета (`math_first`), основанного на логическом сравнении дат тестов (`<`), Stata обрабатывает системные пропуски как бесконечно большие значения, тогда как R (пакет `lubridate`) строго возвращает `NA`, что приводит к удалению строки из регрессии пакетом `fixest`. Исключение этого единичного наблюдения привело к легкому смещению весов внутри кластера и незначительному изменению точечных оценок (например, -0.071 вместо -0.080 для financial low). Однако это никак не влияет на главный качественный вывод авторов: все эффекты спилловера остаются статистически незначимыми.

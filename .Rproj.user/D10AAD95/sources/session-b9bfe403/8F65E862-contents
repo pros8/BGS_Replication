@@ -8,13 +8,17 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
+В ходе первичной обработки данных в R была полностью подтверждена исходная размерность генеральной совокупности, все наблюдения загружены корректно. Для оптимизации процесса перевода кода из Stata в R и отладки синтаксиса использовалась LLM-модель Gemini 3.1 Pro.
+
 ## Загрузка библиотек и данных
-```{r}
-# install.packages(c("tidyverse", "haven", "fixest", "modelsummary"))
+```{r pre_data}
+# install.packages(c("tidyverse", "haven", "fixest", "modelsummary", "lubridate", "knitr"))
 library(tidyverse)    # для манипуляций с данными
 library(haven)        # для чтения .dta файлов
 library(fixest)       # для быстрых регрессий и кластеризованных ошибок
 library(modelsummary) # для создания таблиц
+library(knitr)        # для вывода таблиц баланса
+library(lubridate)    # для работы с датами
 
 # читаем данные
 bgs_data <- read_dta("data/all_BGS_data.dta")
@@ -25,8 +29,9 @@ dim(bgs_data)
 
 ## Репликация таблиц 3,4,5
 
-```{r}
-# Общая подготовка данных
+```{r balance_tables}
+
+# предварительная подготовка
 bgs_balance <- bgs_data %>%
   mutate(
     treat_group = case_when(
@@ -42,89 +47,109 @@ bgs_balance <- bgs_data %>%
       treatment == "IDLT" ~ "Delayed Nonfin loss",
       TRUE ~ NA_character_
     ),
-    # имитируем очистку пропусков из Stata-кода авторов
-    female = if_else(gender_unknown == 1, NA_real_, female),
-    black = if_else(unknown_race == 1, NA_real_, black),
-    hispanic = if_else(unknown_race == 1, NA_real_, hispanic),
-    baseline = if_else(missing_baseline == 1, NA_real_, baseline),
-    iep_yes = if_else(iep_unknown == 1, NA_real_, iep_yes),
-    math = if_else(subject == "math", 1, 0)
-  ) %>%
-  # переименовываем переменные для вывода таблиц
-  rename(
-    `Baseline test score` = baseline,
-    `Grade` = grade,
-    `Female` = female,
-    `Black` = black,
-    `Hispanic` = hispanic,
-    `Free or reduced price lunch` = free_reduced,
-    `Individualized Education Plan (IEP)` = iep_yes,
-    `Subject - Math` = math
+    female = if_else(gender_unknown == 1, NA_real_, as.numeric(female)),
+    black = if_else(unknown_race == 1, NA_real_, as.numeric(black)),
+    hispanic = as.numeric(hispanic),
+    baseline = if_else(missing_baseline == 1, NA_real_, as.numeric(baseline)),
+    iep_yes = if_else(iep_unknown == 1, NA_real_, as.numeric(iep_yes)),
+    free_reduced = as.numeric(free_reduced),
+    math = if_else(subject == "math", 1, 0),
+    grade = as.numeric(grade)
   )
 
-# Bloom (таблица 3)
-bloom_bal_data <- bgs_balance %>%
-  filter(district == "Bloom", treat_group %in% c("Control", "Financial low", "Financial high", "Financial loss")) %>%
-  mutate(treat_group = factor(treat_group, levels = c("Control", "Financial low", "Financial high", "Financial loss")))
+# создаем функцию-генератор
+generate_balance_table <- function(data, dist, groups, cont_vars, prop_vars) {
+  # фильтруем данные
+  d <- data %>% 
+    filter(district == dist, treat_group %in% groups) %>%
+    mutate(treat_group = factor(treat_group, levels = groups))
+  
+  # считаем количество наблюдений (Observations)
+  obs <- d %>% group_by(treat_group) %>% summarise(N = as.character(n()), .groups = "drop")
+  rows <- list(c("Observations", obs$N))
+  
+  # словарь названий
+  var_names <- c("baseline" = "Baseline test score", "grade" = "Grade", 
+                 "female" = "Female", "black" = "Black", "hispanic" = "Hispanic", 
+                 "free_reduced" = "Free or reduced price lunch", 
+                 "iep_yes" = "Individualized Education Plan (IEP)", "math" = "Subject - Math")
+  
+  # проходим по всем переменным
+  for (v in c(cont_vars, prop_vars)) {
+    stats <- d %>% group_by(treat_group) %>% summarise(
+      # считаем точное среднее
+      m_exact = mean(!!sym(v), na.rm = TRUE),
+      # повторяем логику Stata, округляя среднее ПЕРЕД расчетом SD
+      m_round = round(m_exact, 3),
+      # Если это пропорция (prop_vars), используем формулу sqrt(p*(1-p)) на округленном среднем
+      # иначе используем стандартное отклонение sd()
+      s = if(v %in% prop_vars) sqrt(m_round * (1 - m_round)) else sd(!!sym(v), na.rm = TRUE),
+      .groups = "drop"
+    )
+    # добавляем строку со средним и строку со стандартной ошибкой в скобках
+    rows[[length(rows) + 1]] <- c(var_names[[v]], sprintf("%.3f", stats$m_exact))
+    rows[[length(rows) + 1]] <- c("", sprintf("(%.3f)", stats$s))
+  }
+  
+  # собираем в таблицу
+  df_out <- do.call(rbind, rows) %>% as.data.frame()
+  colnames(df_out) <- c("Variable", groups)
+  
+  # очищаем пустые значения (NA), если они появились
+  df_out[df_out == "NA"] <- ""
+  df_out[df_out == "(NA)"] <- ""
+  return(df_out)
+}
 
-datasummary(
-  `Baseline test score` + Female + Black + Hispanic + `Free or reduced price lunch` ~ treat_group * (Mean + SD),
-  data = bloom_bal_data,
-  title = "Table 3: Baseline Characteristics by Treatment Group: Bloom"
-)
+# Bloom (таблица 3)
+df_bloom <- generate_balance_table(bgs_balance, "Bloom", 
+                                   c("Control", "Financial low", "Financial high", "Financial loss"),
+                                   c("baseline"), c("female", "black", "hispanic", "free_reduced"))
 
 # Chicago Heights (таблица 4)
-ch_bal_data <- bgs_balance %>%
-  filter(district == "CH", treat_group %in% c("Control", "Financial low", "Financial high", "Nonfinancial")) %>%
-  mutate(treat_group = factor(treat_group, levels = c("Control", "Financial low", "Financial high", "Nonfinancial")))
-
-datasummary(
-  `Baseline test score` + Grade + Female + Black + Hispanic + `Free or reduced price lunch` + `Individualized Education Plan (IEP)` ~ treat_group * (Mean + SD),
-  data = ch_bal_data,
-  title = "Table 4: Baseline Characteristics by Treatment Group: Chicago Heights"
-)
+df_ch <- generate_balance_table(bgs_balance, "CH", 
+                                c("Control", "Financial low", "Financial high", "Nonfinancial"),
+                                c("baseline", "grade"), c("female", "black", "hispanic", "free_reduced", "iep_yes"))
 
 # CPS панель A (таблица 5)
-cps_imm_data <- bgs_balance %>%
-  filter(district == "CPS", treat_group %in% c("Control", "Financial low", "Financial high", "Nonfinancial", "Financial loss", "Nonfinancial loss")) %>%
-  mutate(treat_group = factor(treat_group, levels = c("Control", "Financial low", "Financial high", "Nonfinancial", "Financial loss", "Nonfinancial loss")))
-
-datasummary(
-  `Baseline test score` + Grade + `Subject - Math` + Female + Black + `Free or reduced price lunch` + `Individualized Education Plan (IEP)` ~ treat_group * (Mean + SD),
-  data = cps_imm_data,
-  title = "Table 5 (Panel A): Baseline Characteristics: CPS (Immediate)"
-)
+df_cps_a <- generate_balance_table(bgs_balance, "CPS", 
+                                   c("Control", "Financial low", "Financial high", "Nonfinancial", "Financial loss", "Nonfinancial loss"),
+                                   c("baseline", "grade"), c("math", "female", "black", "free_reduced", "iep_yes"))
 
 # CPS панель B (таблица 5)
-cps_del_data <- bgs_balance %>%
-  filter(district == "CPS", treat_group %in% c("Control", "Delayed Fin high", "Delayed Nonfin", "Delayed Fin loss", "Delayed Nonfin loss")) %>%
-  mutate(treat_group = factor(treat_group, levels = c("Control", "Delayed Fin high", "Delayed Nonfin", "Delayed Fin loss", "Delayed Nonfin loss")))
+df_cps_b <- generate_balance_table(bgs_balance, "CPS", 
+                                   c("Control", "Delayed Fin high", "Delayed Nonfin", "Delayed Fin loss", "Delayed Nonfin loss"),
+                                   c("baseline", "grade"), c("math", "female", "black", "free_reduced", "iep_yes"))
 
-datasummary(
-  `Baseline test score` + Grade + `Subject - Math` + Female + Black + `Free or reduced price lunch` + `Individualized Education Plan (IEP)` ~ treat_group * (Mean + SD),
-  data = cps_del_data,
-  title = "Table 5 (Panel B): Baseline Characteristics: CPS (Delayed)"
-)
+# Выводим таблицы
+kable(df_bloom, caption = "Table 3: Baseline Characteristics by Treatment Group: Bloom")
+kable(df_ch, caption = "Table 4: Baseline Characteristics by Treatment Group: Chicago Heights")
+kable(df_cps_a, caption = "Table 5 (Panel A): Baseline Characteristics: CPS (Immediate)")
+kable(df_cps_b, caption = "Table 5 (Panel B): Baseline Characteristics: CPS (Delayed)")
 ```
 
+### Анализ баланса выборки (таблицы 3-5)
 
+
+В таблице 3 выборка состоит из учеников старших классов со значительной долей меньшинств (около 63% афроамериканцев) и высоким уровнем учащихся, получающих льготное питание (75%). Средние значения базовых оценок и демографических характеристик равномерно распределены между контрольной группой и тритментами (INF, INH, INLH).
+
+В округе (таблица 4) тестировались ученики с более низкими базовыми оценками. В ходе репликации была выявлена типографская ошибка в оригинальной публикации. Указанное авторами количество наблюдений в контрольной группе (N=194) не соответствует опубликованным средним значениям (например, базовый балл -0.551 и возраст 6.448). Эти средние значения получаются исключительно при выборке N=125 (строго группы INC, IDC, NS без учета CSM), что и показано в нашей таблице.
+
+В таблице 5 самая крупная выборка, состоящая преимущественно из афроамериканцев (около 98%) и учеников из малообеспеченных семей (98%). Баланс соблюден по всем ключевым метрикам во всех 10 сформированных группах (как для немедленных, так и для отложенных стимулов). 
+
+Отсутствие систематических различий в наблюдаемых характеристиках между контрольной и экспериментальными группами до начала вмешательства гарантирует, что полученные в регрессионных моделях эффекты стимулов не являются следствием смещенного отбора (selection bias) и имеют причинно-следственный характер.
 
 ## Репликация таблицы 6 - Немедленные вознаграждения (pooled)
 
-В данном разделе выполняется репликация объединенных моделей (колонки 1 и 2 оригинальной таблицы) для оценки немедленных вознаграждений.
 ```{r table6_code}
 
-# подготовка данных
-
-# оставляем только нужные тритменты
+# Подготовка данных
 treatments_to_keep <- c("INC", "IDC", "NS", "CSM", "INF", "INH", "INT", "INLH", "INLT")
 
 bgs_filtered <- bgs_data %>%
   filter(treatment %in% treatments_to_keep) %>%
   mutate(
     cluster_var = if_else(district %in% c("CPS", "CH"), school_grade, class),
-    # переводим категориальные переменные в факторы, 
-    # чтобы сымитировать префикс "i." из Stata
     grade = as.factor(grade),
     school = as.factor(school),
     session = as.factor(session),
@@ -133,18 +158,15 @@ bgs_filtered <- bgs_data %>%
     district = as.factor(district)
   )
 
-# Модель 1 - без расширенной демографии
-# Оператор ":" создает эффекты переменных внутри каждого округа
-mod1 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
+# Pooled (Колонки 1 и 2)
+mod_pool1 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
                 district:session + district:grade + district:school +
                 district:baseline + district:missing_baseline + 
                 district:baseline_sq + district:baseline_cub,
               data = bgs_filtered, 
               cluster = ~cluster_var)
 
-# Модель 2 - с демографией и историей участия
-# i.subject исключен, чтобы в точности повторить pooled-регрессию из Stata
-mod2 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
+mod_pool2 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
                 district:session + district:grade + district:school +
                 district:baseline + district:missing_baseline + 
                 district:baseline_sq + district:baseline_cub +
@@ -155,39 +177,74 @@ mod2 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT +
               data = bgs_filtered, 
               cluster = ~cluster_var)
 
-# Выводим таблицу
+# Bloom 2009 (Колонки 3 и 4)
+bgs_bl09 <- bgs_filtered %>% filter(session %in% c("Bloom 2009 spring", "Bloom 2009 winter"))
+
+mod_bl09_1 <- feols(current_score_t ~ INF + INH + baseline + missing_baseline + baseline_sq + baseline_cub | session + grade + school, data = bgs_bl09, cluster = ~cluster_var)
+mod_bl09_2 <- feols(current_score_t ~ INF + INH + baseline + missing_baseline + baseline_sq + baseline_cub + black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced | session + grade + school + subject + past_treatment + ar_treatment, data = bgs_bl09, cluster = ~cluster_var)
+
+# Bloom 2010 (Колонки 5 и 6)
+bgs_bl10 <- bgs_filtered %>% filter(session == "Bloom 2010")
+
+mod_bl10_1 <- feols(current_score_t ~ INH + INLH + baseline + missing_baseline + baseline_sq + baseline_cub | session + grade + school, data = bgs_bl10, cluster = ~cluster_var)
+mod_bl10_2 <- feols(current_score_t ~ INH + INLH + baseline + missing_baseline + baseline_sq + baseline_cub + black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced | session + grade + school + subject + past_treatment + ar_treatment, data = bgs_bl10, cluster = ~cluster_var)
+
+# Chicago Heights (Колонки 7 и 8)
+bgs_ch <- bgs_filtered %>% filter(district == "CH")
+
+mod_ch1 <- feols(current_score_t ~ INF + INH + INT + baseline + missing_baseline + baseline_sq + baseline_cub | session + grade + school, data = bgs_ch, cluster = ~cluster_var)
+mod_ch2 <- feols(current_score_t ~ INF + INH + INT + baseline + missing_baseline + baseline_sq + baseline_cub + black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced | session + grade + school + subject + past_treatment + ar_treatment, data = bgs_ch, cluster = ~cluster_var)
+
+# CPS fall (Колонки 9 и 10)
+bgs_cps_fall <- bgs_filtered %>% filter(session == "CPS fall")
+
+mod_cps_f1 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT + baseline + missing_baseline + baseline_sq + baseline_cub | session + grade + school, data = bgs_cps_fall, cluster = ~cluster_var)
+mod_cps_f2 <- feols(current_score_t ~ INF + INH + INT + INLH + INLT + baseline + missing_baseline + baseline_sq + baseline_cub + black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced | session + grade + school + subject + past_treatment + ar_treatment, data = bgs_cps_fall, cluster = ~cluster_var)
+
+# CPS winter (Колонки 11 и 12)
+bgs_cps_wint <- bgs_filtered %>% filter(session == "CPS winter")
+
+mod_cps_w1 <- feols(current_score_t ~ INH + INT + INLH + INLT + baseline + missing_baseline + baseline_sq + baseline_cub | session + grade + school, data = bgs_cps_wint, cluster = ~cluster_var)
+mod_cps_w2 <- feols(current_score_t ~ INH + INT + INLH + INLT + baseline + missing_baseline + baseline_sq + baseline_cub + black + hispanic + unknown_race + iep_unknown + iep_yes + female + gender_unknown + free_reduced | session + grade + school + subject + past_treatment + ar_treatment, data = bgs_cps_wint, cluster = ~cluster_var)
+
+# Вывод таблицы
 modelsummary(
-  list("Model 1 (No Covariates)" = mod1, "Model 2 (With Covariates)" = mod2),
-  coef_map = c("INF" = "Financial low", 
-               "INH" = "Financial high",
-               "INT" = "Nonfinancial",
-               "INLH" = "Financial loss",
-               "INLT" = "Nonfinancial loss"),
+  list("(1) Pooled" = mod_pool1, "(2) Pooled" = mod_pool2,
+       "(3) Bl09" = mod_bl09_1, "(4) Bl09" = mod_bl09_2,
+       "(5) Bl10" = mod_bl10_1, "(6) Bl10" = mod_bl10_2,
+       "(7) CH"   = mod_ch1,     "(8) CH"   = mod_ch2,
+       "(9) CPS F" = mod_cps_f1,  "(10) CPS F" = mod_cps_f2,
+       "(11) CPS W" = mod_cps_w1, "(12) CPS W" = mod_cps_w2),
+  coef_map = c("INF" = "Financial low", "INH" = "Financial high", "INT" = "Nonfinancial",
+               "INLH" = "Financial loss", "INLT" = "Nonfinancial loss"),
   gof_map = c("nobs", "n.clusters"),
-  stars = TRUE
+  stars = TRUE,
+  title = "Table 6: Effects of Immediate Rewards on Test Performance"
 )
 ```
 
 
-### Анализ полученных результатов
+## Анализ результатов немедленных вознаграждений (Таблица 6)
 
-Репликация в R, использующая прямое взаимодействие ковариат с индикатором округа, позволила со 100% точностью воспроизвести оригинальные результаты статьи (вплоть до тысячных долей коэффициентов и количества наблюдений - 6843).
+Репликация спецификации из 12 моделей позволяет оценить устойчивость эффектов немедленного стимулирования как на объединенной выборке (колонки 1 и 2), так и в разрезе отдельных экспериментальных волн (колонки 3–12). 
 
-Результаты показывают, что эффект вознаграждений зависит от их размера и формулировки (framing). Небольшие финансовые стимулы (financial low) не оказывают статистически значимого влияния на успеваемость (коэффициент 0,009). Однако повышение суммы до 20 долларов (financial high) приводит к значительному росту результатов. Наибольшую эффективность демонстрируют вознаграждения, сформулированные как потенциальная потеря (loss framing) - коэффициенты 0,153 для финансовых и 0,115 для нефинансовых стимулов.
+Небольшие финансовые стимулы (financial low) в объединенных моделях статистически незначимы (коэффициент 0.009 в модели 1). Однако в округе Chicago Heights (колонки 7 и 8) этот эффект становится крупным и значимым (0.245), что указывает на высокую чувствительность к любым стимулам у групп с изначально более низкой базовой успеваемостью. Крупные стимулы (Financial high = $20) демонстрируют положительное влияние на объединенных данных (0.093) и в большинстве отдельных волн (например, в Bloom 2009 эффект достигает 0.245).
+
+Вознаграждения, сформулированные в терминах потенциальных потерь (financial loss и nonfinancial loss), показывают наибольшую устойчивость и величину коэффициентов. В объединенной выборке без демографических контролей эффект financial loss составляет 0.153, а nonfinancial loss — 0.115. Превосходство фрейминга потерь над фреймингом выигрышей прослеживается практически во всех подвыборках (в Bloom 2010, Chicago Heights, CPS fall), что может подтвердить концепцию неприятия потерь (loss aversion) с точки зрения образовательных усилий.
 
 ## Репликация таблицы 7 - влияние отложенных вознаграждений
 
 В этой части оценивается влияние отложенных вознаграждений (выданных с задержкой в один месяц). Согласно методологии авторов, для этого используется только осенняя сессия 2010 года в округе CPS, а группа тритмента "Financial Low" исключается из выборки.
 
 ```{r table7_code}
-# Фильтрация данных строго по логике Stata-файла
+# Фильтрация данных
 bgs_delayed <- bgs_data %>%
   filter(district == "CPS", 
          session == "CPS fall", 
          treatment != "INF") %>%
   mutate(cluster_var = school_grade)
 
-# Оценка Модели 1 (без демографии)
+# оценка модели 1 (без демографии)
 mod1_delayed <- feols(current_score_t ~ IDH + IDT + IDLH + IDLT + 
                         INH + INT + INLH + INLT +
                         baseline + baseline_sq + baseline_cub + missing_baseline +
@@ -195,7 +252,7 @@ mod1_delayed <- feols(current_score_t ~ IDH + IDT + IDLH + IDLT +
                       data = bgs_delayed,
                       cluster = ~cluster_var)
 
-# Оценка Модели 2 (с полной демографией)
+# Оценка модели 2 (с полной демографией)
 mod2_delayed <- feols(current_score_t ~ IDH + IDT + IDLH + IDLT + 
                         INH + INT + INLH + INLT +
                         baseline + baseline_sq + baseline_cub + missing_baseline +
@@ -215,7 +272,8 @@ modelsummary(
                "IDLH" = "Delayed Financial Loss",
                "IDLT" = "Delayed Non-Financial Loss"),
   gof_map = c("nobs", "n.clusters"),
-  stars = TRUE
+  stars = TRUE,
+  title = "Table 7: Effects of Delayed Rewards"
 )
 ```
 
@@ -230,7 +288,7 @@ modelsummary(
 bgs_age <- bgs_filtered %>%
   mutate(elementary = if_else(as.numeric(as.character(grade)) < 6, 1, 0))
 
-# формула для Pooled (с взаимодействиями округов)
+# формула для pooled (с взаимодействиями округов)
 fmla_pooled <- current_score_t ~ INF + INH + INT + INLH + INLT +
   district:session + district:grade + district:school +
   district:baseline + district:missing_baseline + 
@@ -277,7 +335,8 @@ modelsummary(
                "INLH" = "Financial loss",
                "INLT" = "Nonfinancial loss"),
   gof_map = c("nobs", "n.clusters"),
-  stars = TRUE
+  stars = TRUE,
+  title = "Table 8: Treatment Effects by Age (Pooled)"
 )
 ```
 ### Анализ результатов по возрасту (таблица 8)
@@ -289,11 +348,11 @@ modelsummary(
 
 ## Репликация таблицы 9
 ```{r table9_code}
-# --- Модели Panel A (Pooled) ---
+# Panel A (Pooled)
 mod_pool_read <- feols(fmla_pooled, data = filter(bgs_filtered, subject == "reading"), cluster = ~cluster_var)
 mod_pool_math <- feols(fmla_pooled, data = filter(bgs_filtered, subject == "math"), cluster = ~cluster_var)
 
-# --- Модели Panel B (Округа) ---
+# Panel B (Округа)
 # Bloom (только чтение)
 mod_bloom_read <- feols(fmla_single, data = filter(bgs_filtered, district == "Bloom"), cluster = ~cluster_var)
 
@@ -304,7 +363,7 @@ mod_ch_math <- feols(fmla_single, data = filter(bgs_filtered, district == "CH"),
 mod_cps_read <- feols(fmla_single, data = filter(bgs_filtered, district == "CPS" & subject == "reading"), cluster = ~cluster_var)
 mod_cps_math <- feols(fmla_single, data = filter(bgs_filtered, district == "CPS" & subject == "math"), cluster = ~cluster_var)
 
-# Вывод таблицы (без звездочек значимости)
+# вывод таблицы
 modelsummary(
   list("Pooled Read" = mod_pool_read, "Pooled Math" = mod_pool_math,
        "Bloom Read" = mod_bloom_read, "CH Math" = mod_ch_math,
@@ -315,7 +374,8 @@ modelsummary(
                "INLH" = "Financial loss",
                "INLT" = "Nonfinancial loss"),
   gof_map = c("nobs", "n.clusters"),
-  stars = TRUE
+  stars = TRUE,
+  title = "Table 9: Treatment Effects by Test Subject"
 )
 ```
 
@@ -378,7 +438,8 @@ modelsummary(
   coef_map = c("INF" = "Financial low", "INH" = "Financial high", "INT" = "Nonfinancial",
                "INLH" = "Financial loss", "INLT" = "Nonfinancial loss"),
   gof_map = c("nobs", "n.clusters"),
-  stars = TRUE
+  stars = TRUE,
+  title = "Table 10: Treatment Effects by Gender"
 )
 ```
 
@@ -389,7 +450,6 @@ modelsummary(
 
 ## Репликация таблицы 11
 ```{r table11_code}
-library(lubridate)
 
 # подготовка дат и переменных исходов с учетом пустых строк ("")
 bgs_future <- bgs_data %>%
@@ -479,7 +539,8 @@ modelsummary(
   coef_map = c("INF" = "Financial low", "INH" = "Financial high", "INT" = "Nonfinancial",
                "INLH" = "Financial loss", "INLT" = "Nonfinancial loss"),
   gof_map = c("nobs", "n.clusters"),
-  stars = TRUE
+  stars = TRUE,
+  title = "Table 11: Treatment Effects on Future Test Scores"
 )
 ```
 
@@ -493,3 +554,4 @@ modelsummary(
 Все оценки коэффициентов, как без демографических контролей, так и с ними, статистически незначимы. Это означает, что применение внешних вознаграждений не вытесняет внутреннюю мотивацию и не наносит ущерба изучению смежных дисциплин. В совокупности это делает использование стимулов безопасным инструментом образовательной политики в краткосрочной перспективе.
 
 В моделях оценки влияния на другие предметы (Other Subject) наша выборка составила 4599 наблюдений вместо 4600 в оригинале. После анализа файла ".do" для 11 таблицы (в т.ч. с использованием LLM-модели), мы пришли к выводу, что расхождение в 1 наблюдение связано с  разницей в обработке пропущенных значений дат между R и Stata. При вычислении индикатора первенства предмета (`math_first`), основанного на логическом сравнении дат тестов (`<`), Stata обрабатывает системные пропуски как бесконечно большие значения, тогда как R (пакет `lubridate`) строго возвращает `NA`, что приводит к удалению строки из регрессии пакетом `fixest`. Исключение этого единичного наблюдения привело к легкому смещению весов внутри кластера и незначительному изменению точечных оценок (например, -0.071 вместо -0.080 для financial low). Однако это никак не влияет на главный качественный вывод авторов: все эффекты спилловера остаются статистически незначимыми.
+

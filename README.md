@@ -23,7 +23,7 @@
 
 * `data/` — директория с исходными данными (`all_BGS_data.dta`).
 * `docs/` — директория с сопроводительной документацией:
-  * `report_of_replication` - итоговый отчет по репликации (PDF).
+  * `report_of_replication.pdf` - итоговый отчет по репликации.
   * `article_review.pdf` - рецензия на оригинальную статью.
   * `article_origin.pdf` - текст оригинальной статьи авторов.
 * `replication_report.Rmd` — основной файл с кодом пайплайна.
@@ -36,7 +36,7 @@
 
 1.  Клонируйте репозиторий на свой локальный компьютер:
     ```bash
-    git clone [https://github.com/pros8/BGS_Replication](https://github.com/pros8/BGS_Replication)
+    git clone https://github.com/pros8/BGS_Replication
     ```
 2.  Откройте файл проекта `BGS_Replication.Rproj` в среде RStudio.
 3.  Убедитесь, что файл данных `all_BGS_data.dta` находится в папке `data/`.
